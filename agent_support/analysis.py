@@ -89,7 +89,7 @@ def compare(left: str | Path, right: str | Path) -> dict:
 
 SUPPORT_ONLY_CONFIG_KEYS = {"condition", "memory_corpus", "memory_index", "memory_top_k",
                             "trajectory_corpus", "trajectory_index", "trajectory_top_k",
-                            "trajectory_token_budget"}
+                            "trajectory_token_budget", "alfworld_config"}
 
 
 def compare_support(baseline_dir: str | Path, supported_dir: str | Path) -> dict:
