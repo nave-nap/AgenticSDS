@@ -16,7 +16,7 @@ from .benchmarks import make_episode
 from .common import canonical_digest, read_json, validate_config, validate_manifest, write_json_atomic
 from .model import QwenModel
 from .policy import alfworld_messages, parse_alfworld, parse_textcraft, textcraft_messages
-from .memory import ActionMemory, SentenceEmbedder, support_messages
+from .memory import ActionMemory, RETRIEVAL_POLICY, SentenceEmbedder, support_messages
 
 
 def package_versions() -> dict:
@@ -89,7 +89,8 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                 record["proposed_action"] = proposed_action
                 record["proposal_raw_model_output"] = raw
                 record["support"] = {
-                    "mechanism": "m2_action_memory", "retrieval_seconds": retrieval_time,
+                    "mechanism": "m2_action_memory", "selection_policy": RETRIEVAL_POLICY,
+                    "retrieval_seconds": retrieval_time, "action_changed": False,
                     "retrieved": [{"memory_id": hit["memory_id"], "similarity": hit["similarity"],
                                    "content": {key: hit[key] for key in ("task_prompt", "observation", "action",
                                                                             "feedback", "failed_action", "episode_success")}}
@@ -120,6 +121,8 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                         record["support"]["parse_error"] = True
                         support_parse_errors += 1
                     record["support"]["action_changed"] = action != proposed_action
+                else:
+                    record["support"]["fallback_reason"] = "no_relevant_memory"
             if action is None:
                 parser_errors += 1
                 record["error"] = "parse_error"
@@ -268,6 +271,7 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
     if config["condition"] == "m2_always":
         metadata["memory_corpus_sha256"] = canonical_digest(corpus)
         metadata["memory_index_sha256"] = canonical_digest(index_data)
+        metadata["memory_selection_policy"] = RETRIEVAL_POLICY
     write_json_atomic(directory / "run.json", metadata)
     episodes = []
     try:

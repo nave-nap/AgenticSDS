@@ -3,7 +3,7 @@ import json
 import pytest
 
 from agent_support.common import canonical_digest, digest_text, write_json_atomic
-from agent_support.memory import ActionMemory, build_corpus, build_index, retrieval_text, support_messages
+from agent_support.memory import ActionMemory, build_corpus, build_index, related_action, retrieval_text, support_messages
 from agent_support.manifests import write_training_manifest
 from agent_support.runner import run, run_episode
 
@@ -94,6 +94,36 @@ def test_index_and_support_prompt_keep_action_visible():
     assert "Got 1 log" in messages[-1]["content"]
 
 
+def test_retrieval_uses_only_successful_matching_actions():
+    base = {"benchmark": "textcraft", "task_prompt": "Goal: craft plank.",
+            "observation": "Start", "feedback": "Got 1 log"}
+    records = [
+        {**base, "memory_id": "good", "task_id": "textcraft:seed:1000", "action": "get 1 log",
+         "failed_action": False, "episode_success": True},
+        {**base, "memory_id": "failed", "task_id": "textcraft:seed:1001", "action": "get 1 log",
+         "failed_action": True, "episode_success": True},
+        {**base, "memory_id": "unfinished", "task_id": "textcraft:seed:1002", "action": "get 1 log",
+         "failed_action": False, "episode_success": False},
+        {**base, "memory_id": "wrong-item", "task_id": "textcraft:seed:1003", "action": "get 1 sand",
+         "failed_action": False, "episode_success": True},
+    ]
+
+    class FakeEmbedder:
+        model_id = "fake"
+
+        def encode(self, texts):
+            return [[1.0, 0.0] for _ in texts]
+
+    corpus = {"records": records}
+    memory = ActionMemory(corpus, build_index(corpus, FakeEmbedder()), FakeEmbedder())
+    hits, _ = memory.retrieve("textcraft", "Goal: craft plank.", "Start", "get 2 log")
+    assert [hit["memory_id"] for hit in hits] == ["good"]
+    no_hits, _ = memory.retrieve("textcraft", "Goal: craft plank.", "Start", "craft 1 plank using 1 log")
+    assert no_hits == []
+    assert related_action("alfworld", "go to drawer 1", "go to drawer 2")
+    assert not related_action("alfworld", "go to drawer 1", "go to fridge 1")
+
+
 def test_m2_reconsideration_logs_extra_call_and_changed_action():
     class FakeModel:
         def __init__(self):
@@ -138,6 +168,46 @@ def test_m2_reconsideration_logs_extra_call_and_changed_action():
     assert result["trace"][0]["action"] == "get 1 log"
 
 
+def test_no_relevant_memory_keeps_original_proposal():
+    class OneCallModel:
+        calls = 0
+
+        def generate(self, messages):
+            self.calls += 1
+            assert self.calls == 1
+            return {"text": "Action: get 1 log", "input_tokens": 10,
+                    "output_tokens": 4, "inference_seconds": 0.1}
+
+    class FakeEpisode:
+        initial_observation = observation = task_prompt = "Goal: craft plank."
+        actions = []
+
+        def reset(self):
+            pass
+
+        def step(self, action):
+            assert action == "get 1 log"
+            return {"observation": "Done", "done": True, "success": True, "failed_action": False}
+
+        def close(self):
+            pass
+
+    class NoHits:
+        def retrieve(self, benchmark, task_prompt, observation, action):
+            return [], 0.0
+
+    result = run_episode("textcraft", {"task_id": "textcraft:seed:42"},
+                         {"max_actions": 1, "max_decisions": 1, "history_window": 1},
+                         OneCallModel(), episode_factory=lambda *_: FakeEpisode(), support=NoHits())
+    assert result["success"]
+    assert result["support_calls"] == 1
+    assert result["support_model_calls"] == 0
+    assert result["model_calls"] == 1
+    assert result["actions_changed_by_support"] == 0
+    assert result["trace"][0]["action"] == result["trace"][0]["proposed_action"]
+    assert result["trace"][0]["support"]["fallback_reason"] == "no_relevant_memory"
+
+
 def test_supported_run_requires_exclusion_proof_and_records_memory_hashes(monkeypatch, tmp_path):
     dev_manifest = manifest("development", task(42, "Goal: craft plank."))
     record = {"memory_id": "train-step", "task_id": "textcraft:seed:1000", "benchmark": "textcraft",
@@ -168,7 +238,7 @@ def test_supported_run_requires_exclusion_proof_and_records_memory_hashes(monkey
 
     class FakeModel:
         def __init__(self):
-            self.outputs = iter(["Action: get 1 plank", "Action: get 1 log"])
+            self.outputs = iter(["Action: get 1 log", "Action: get 2 log"])
 
         def generate(self, messages):
             return {"text": next(self.outputs), "input_tokens": 10,
@@ -182,7 +252,7 @@ def test_supported_run_requires_exclusion_proof_and_records_memory_hashes(monkey
             pass
 
         def step(self, action):
-            assert action == "get 1 log"
+            assert action == "get 2 log"
             return {"observation": "Done", "done": True, "success": True, "failed_action": False}
 
         def close(self):

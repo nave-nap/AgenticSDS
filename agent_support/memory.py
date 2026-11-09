@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import time
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from .common import canonical_digest, read_json, validate_manifest, write_json_a
 
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+RETRIEVAL_POLICY = "successful_episode_valid_action_same_target_v1"
 
 
 def _identities(manifest: dict) -> tuple[set[str], set[str]]:
@@ -106,6 +108,31 @@ def retrieval_text(record: dict) -> str:
             f"Observation: {record['observation'][:400]}")
 
 
+def related_action(benchmark: str, proposed: str, remembered: str) -> bool:
+    """Require an action target match before using semantic similarity."""
+    if benchmark == "textcraft":
+        pattern = r"^(get|craft)\s+\d+\s+(.+?)(?:\s+using\s+|$)"
+        left = re.match(pattern, proposed.lower())
+        right = re.match(pattern, remembered.lower())
+        return bool(left and right and left.group(1) == right.group(1)
+                    and left.group(2).strip() == right.group(2).strip())
+    if benchmark == "alfworld":
+        stop = {"go", "to", "from", "with", "in", "on", "at", "under", "up", "down",
+                "take", "move", "open", "close", "use", "examine", "heat", "cool", "clean", "slice"}
+
+        def parts(action: str) -> tuple[str, set[str]]:
+            words = action.lower().split()
+            if not words:
+                return "", set()
+            return words[0], {word for word in words[1:] if word not in stop and not word.isdigit()}
+
+        left_verb, left_objects = parts(proposed)
+        right_verb, right_objects = parts(remembered)
+        return bool(left_objects and right_objects and left_verb == right_verb
+                    and left_objects & right_objects)
+    raise ValueError(f"Unknown benchmark: {benchmark}")
+
+
 class SentenceEmbedder:
     """Mean-pooled MiniLM embeddings using dependencies already in the GPU runner."""
 
@@ -164,11 +191,16 @@ class ActionMemory:
 
     def retrieve(self, benchmark: str, task_prompt: str, observation: str, action: str) -> tuple[list[dict], float]:
         started = time.perf_counter()
+        candidates = [i for i, record in enumerate(self.records)
+                      if record["benchmark"] == benchmark and record["episode_success"]
+                      and not record["failed_action"]
+                      and related_action(benchmark, action, record["action"])]
+        if not candidates:
+            return [], round(time.perf_counter() - started, 3)
         query = retrieval_text({"task_prompt": task_prompt, "observation": observation, "action": action})
         vector = self.embedder.encode([query])[0]
         if len(vector) != len(self.vectors[0]):
             raise ValueError("Memory query vector dimension differs from index")
-        candidates = [i for i, record in enumerate(self.records) if record["benchmark"] == benchmark]
         similarities = {i: sum(a * b for a, b in zip(self.vectors[i], vector)) for i in candidates}
         ranked = sorted(candidates, key=lambda i: (-float(similarities[i]), self.records[i]["memory_id"]))
         best = []
@@ -186,7 +218,9 @@ class ActionMemory:
 
 def support_messages(base_messages: list[dict], proposed_action: str, hits: list[dict], benchmark: str) -> list[dict]:
     lines = [f"You proposed: {proposed_action}",
-             "Relevant experiences from separate training tasks follow. Consider their outcomes before choosing the action to execute."]
+             "The following actions were accepted by the environment in training episodes that ultimately succeeded, "
+             "and they share the proposed action's target or object. "
+             "Their inventories and states may differ from yours. Keep the proposed action unless an example clearly supports a better choice."]
     for i, hit in enumerate(hits, 1):
         task = hit["task_prompt"]
         if "Goal: craft " in task:

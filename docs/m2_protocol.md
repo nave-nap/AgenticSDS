@@ -33,12 +33,24 @@ The index and corpus are saved separately under Drive's
 ## M2 behavior
 
 The first model call uses the unchanged baseline prompt and proposes one
-action. M2 retrieves the three closest records from the matching benchmark,
-shows their actions and outcomes, then makes one extra model call to choose
-the action to execute. If that second response does not parse, the original
-proposal executes and the support parse error is logged. The environment
-action budget and original action parser stay the same. Model decisions count
-the original action choice; `model_calls` also counts the extra support call.
+action. M2 attempts retrieval at every valid proposal. It considers only
+actions accepted by the environment within ultimately successful training
+episodes. TextCraft examples must have the same command type and target item;
+ALFWorld examples must have the same command verb and share an object type
+(ignoring instance numbers). MiniLM ranks matching examples, and up to three
+are shown to the model for one extra action-choice call. If there is no match,
+the original proposal executes without a second model call. If the second
+response does not parse, the original proposal executes and the support parse
+error is logged. The environment action budget and original action parser
+stay the same. Model decisions count the original action choice; `model_calls`
+also counts any extra support call. `run.json` records the memory-selection
+policy version.
+
+This filter was added after the first three-task smoke runs showed that most
+retrieved TextCraft examples were failed actions and frequently displaced
+workable proposals. The corpus and index remain unchanged; this policy uses
+the outcome labels already stored in the training-only corpus. The 40-task
+training corpus has limited positive coverage, so support may activate rarely.
 
 Each supported trace includes the original proposal, memory IDs, similarity
 scores, displayed content, retrieval time, second response, extra tokens and
