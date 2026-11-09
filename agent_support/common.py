@@ -67,8 +67,8 @@ def validate_manifest(manifest: dict) -> None:
 
 
 def validate_config(config: dict, benchmark: str) -> None:
-    if config.get("benchmark") != benchmark or config.get("condition") != "baseline":
-        raise ValueError("Config benchmark or condition does not match baseline manifest")
+    if config.get("benchmark") != benchmark or config.get("condition") not in {"baseline", "m2_always"}:
+        raise ValueError("Config benchmark or condition is invalid")
     if config.get("quantization") != "nf4_4bit":
         raise ValueError("Baseline requires NF4 4-bit quantization")
     for key in ("max_actions", "max_decisions", "history_window", "max_new_tokens"):
@@ -76,3 +76,8 @@ def validate_config(config: dict, benchmark: str) -> None:
             raise ValueError(f"{key} must be a positive integer")
     if not isinstance(config.get("model_id"), str) or not config["model_id"]:
         raise ValueError("model_id is required")
+    if config["condition"] == "m2_always":
+        if not all(isinstance(config.get(key), str) and config[key] for key in ("memory_corpus", "memory_index")):
+            raise ValueError("M2 requires memory_corpus and memory_index paths")
+        if not isinstance(config.get("memory_top_k"), int) or config["memory_top_k"] <= 0:
+            raise ValueError("M2 requires a positive memory_top_k")

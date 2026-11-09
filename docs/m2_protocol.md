@@ -1,0 +1,67 @@
+# M2 action-conditioned memory protocol
+
+## Frozen development baseline
+
+The reviewed no-support pilots are recorded in [`baseline_pilot.json`](baseline_pilot.json).
+ALFWorld run `f95c88b5` solved 2/20 development tasks; TextCraft run `39ab9386`
+solved 4/20. Both used commit `0368e003da216b958cf8cc4350e26f3f7ac57067`,
+Qwen2.5-7B-Instruct with NF4 quantization, 30 environment actions and 30 model
+decisions. Their summaries and hashes are frozen in that record. The exact
+ALFWorld development manifest is now in `manifests/alfworld/development.json`;
+the TextCraft development manifest was already committed. Keep the full raw
+pilot run directories on Drive. Do not use either pilot's trajectories as memory.
+
+## Training-only corpus
+
+Use [`notebooks/m2_launcher.ipynb`](../notebooks/m2_launcher.ipynb) on a Colab
+GPU. It creates 40 ALFWorld training games from the benchmark's `train` split
+and 40 TextCraft tasks from seeds beginning at 1000. The training manifest
+generator rejects task IDs and task-content hashes found in the development
+or held-out manifests. The corpus builder checks that boundary again and
+accepts only complete baseline runs whose manifest partition is `training`.
+The M2 runner also requires proof that its evaluation manifest was excluded
+when the corpus was built.
+
+The corpus stores one record per distinct environment transition: task, observation,
+action, feedback, and whether the action failed or the episode succeeded.
+It does not store parse-only decisions. An index embeds a compact task,
+observation, and proposed-action description with
+`sentence-transformers/all-MiniLM-L6-v2`, mean pooling, and cosine similarity.
+The index and corpus are saved separately under Drive's
+`agent_support/memory/<benchmark>/` and are linked by a content hash.
+
+## M2 behavior
+
+The first model call uses the unchanged baseline prompt and proposes one
+action. M2 retrieves the three closest records from the matching benchmark,
+shows their actions and outcomes, then makes one extra model call to choose
+the action to execute. If that second response does not parse, the original
+proposal executes and the support parse error is logged. The environment
+action budget and original action parser stay the same. Model decisions count
+the original action choice; `model_calls` also counts the extra support call.
+
+Each supported trace includes the original proposal, memory IDs, similarity
+scores, displayed content, retrieval time, second response, extra tokens and
+inference time, and whether the action changed. The full run snapshots the
+configuration and memory artifact hashes. Compare supported and baseline
+runs only on the same development task manifest, model settings, benchmark
+versions, and action budget. If a shared baseline behavior bug is fixed,
+rerun the baseline before comparison.
+
+The current `agent_support.analysis` command still enforces identical baseline
+configurations. Paired baseline-versus-M2 analysis is the later comparison
+step; it should not be run through that baseline-only command yet.
+
+## Execution order
+
+1. Publish this code and open `m2_launcher.ipynb` in a fresh Colab GPU runtime.
+2. Run its setup and training-manifest cells. Confirm each training manifest
+   has 40 tasks and the development and held-out exclusions are present.
+3. Enable `RUN_TRAINING`, collect both baseline training runs, and confirm
+   `run.json` says `complete` with 40 tasks each.
+4. Enable `BUILD_MEMORY`, build and inspect both corpus and index files.
+5. Enable `RUN_M2_SMOKE`, run three development tasks per benchmark, and
+   inspect the full traces before a 20-task supported pilot.
+
+The local repository cannot perform steps 3–5 without a CUDA GPU and the
+benchmark installations. The notebook leaves all run flags off by default.

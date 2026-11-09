@@ -16,4 +16,10 @@ episodes/0000_*.json    One full trajectory per task
 
 Every episode records the benchmark and task ID; success and final status; environment-action and model-decision counts; parser and failed-action counts; input and output token totals; inference and elapsed time; initial observation; and a `trace` array. Each trace entry stores the decision number, model output, parsed action, input observation, output observation, token counts, and benchmark outcome. ALFWorld entries also store the action list visible at that decision. Parse errors have no environment-action number.
 
-The runner accepts only `condition: baseline` for now. A future support implementation should add support-specific fields and its own compatibility contract, while retaining the same benchmark adapters, task manifests, base prompts, parsers, action budget, and result fields. Add retrieval IDs, similarity scores, support calls, and support tokens when M2 is implemented.
+The runner accepts `condition: baseline` and `condition: m2_always`. M2 keeps
+the same benchmark adapters, base prompts, parsers, and action budget. Its
+episode and summary files additionally record support calls, extra model calls
+and tokens, retrieval time, support parse errors, and actions changed after
+support. Each supported trace records the original proposed action and the
+retrieved memory IDs, similarity scores, displayed content, and second model
+response. `run.json` records the content hashes of the memory corpus and index.

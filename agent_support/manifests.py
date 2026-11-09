@@ -148,6 +148,62 @@ def write_splits(benchmark: str, tasks: list[dict], dev_count: int, heldout_coun
         print(f"{output}: {len(subset)} tasks")
 
 
+def write_training_manifest(benchmark: str, count: int, output: str | Path,
+                            excluded_paths: list[str | Path], seed: int = 43,
+                            config_path: str | Path | None = None, start_seed: int = 1000) -> dict:
+    """Choose distinct training tasks and reject overlap with evaluation manifests."""
+    from .common import read_json
+
+    if count < 1 or not excluded_paths:
+        raise ValueError("Positive count and development/held-out exclusions are required")
+    excluded_ids = set()
+    excluded_hashes = set()
+    partitions = set()
+    key = "game_sha256" if benchmark == "alfworld" else "observation_sha256"
+    for path in excluded_paths:
+        manifest = read_json(path)
+        validate_manifest(manifest)
+        if manifest["benchmark"] != benchmark or manifest.get("partition") not in {"development", "heldout"}:
+            raise ValueError(f"Wrong exclusion manifest: {path}")
+        partitions.add(manifest["partition"])
+        excluded_ids.update(task["task_id"] for task in manifest["tasks"])
+        excluded_hashes.update(task[key] for task in manifest["tasks"])
+    if partitions != {"development", "heldout"}:
+        raise ValueError("Both development and held-out manifests are required")
+    if benchmark == "alfworld":
+        if config_path is None:
+            raise ValueError("ALFWorld training manifest requires --config")
+        candidates = alfworld_game_records(config_path, "train")
+        random.Random(seed).shuffle(candidates)
+    elif benchmark == "textcraft":
+        # Generate enough candidates to skip accidental duplicate observations.
+        candidates = build_textcraft(start_seed, count * 3)
+    else:
+        raise ValueError(f"Unknown benchmark: {benchmark}")
+    tasks = []
+    chosen_hashes = set()
+    for task in candidates:
+        fingerprint = task[key]
+        if task["task_id"] in excluded_ids or fingerprint in excluded_hashes or fingerprint in chosen_hashes:
+            continue
+        tasks.append(task)
+        chosen_hashes.add(fingerprint)
+        if len(tasks) == count:
+            break
+    if len(tasks) != count:
+        raise ValueError(f"Only {len(tasks)} distinct training tasks available; requested {count}")
+    manifest = {"schema_version": 1, "benchmark": benchmark, "partition": "training",
+                "selection_seed": seed, "tasks": tasks}
+    validate_manifest(manifest)
+    target = Path(output)
+    if target.exists():
+        if read_json(target) != manifest:
+            raise FileExistsError(f"Existing training manifest differs: {target}")
+    else:
+        write_json_atomic(target, manifest)
+    return manifest
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("benchmark", choices=("alfworld", "textcraft"))

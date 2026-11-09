@@ -1,0 +1,72 @@
+{
+  "runs": {
+    "alfworld": {
+      "condition": "baseline",
+      "config_sha256": "6f86e44363aac5b9bbcf71d9482bd0e92ed13bc34618493488756a0799b01158",
+      "finished_utc": "2026-11-09T01:54:51.285596+00:00",
+      "git_commit": "0368e003da216b958cf8cc4350e26f3f7ac57067",
+      "manifest_sha256": "e26f5a4db36760046329659f36a1e3395a49d0c906783a61e1b0fcbd56f5760e",
+      "package_versions": {
+        "accelerate": "1.15.0",
+        "alfworld": "0.4.2",
+        "bitsandbytes": "0.50.2",
+        "textcraft": "0.0.3",
+        "textworld": "1.7.0",
+        "torch": "2.14.1+cu130",
+        "transformers": "4.57.6"
+      },
+      "partition": "development",
+      "python_version": "3.13.16",
+      "run_id": "20261109T014612Z_f95c88b5",
+      "selected_task_count": 20,
+      "started_utc": "2026-11-09T01:46:12.323184+00:00",
+      "summary": {
+        "environment_actions": 416,
+        "failed_actions": 0,
+        "inference_seconds": 322.112,
+        "input_tokens": 284508,
+        "model_decisions": 417,
+        "output_tokens": 1073,
+        "parser_errors": 1,
+        "success_rate": 0.1,
+        "successes": 2,
+        "tasks": 20
+      }
+    },
+    "textcraft": {
+      "condition": "baseline",
+      "config_sha256": "01322aad2c89e173883163d507a995685614f190c0a67d71e0f7ec70f95adcc2",
+      "finished_utc": "2026-11-09T02:08:00.492060+00:00",
+      "git_commit": "0368e003da216b958cf8cc4350e26f3f7ac57067",
+      "manifest_sha256": "4ec57f36416ffe7f97b004b67d107e94750fa20b889d95f580690f4dfca4900e",
+      "package_versions": {
+        "accelerate": "1.15.0",
+        "alfworld": "0.4.2",
+        "bitsandbytes": "0.50.2",
+        "textcraft": "0.0.3",
+        "textworld": "1.7.0",
+        "torch": "2.14.1+cu130",
+        "transformers": "4.57.6"
+      },
+      "partition": "development",
+      "python_version": "3.13.16",
+      "run_id": "20261109T015455Z_39ab9386",
+      "selected_task_count": 20,
+      "started_utc": "2026-11-09T01:54:55.987891+00:00",
+      "summary": {
+        "environment_actions": 538,
+        "failed_actions": 455,
+        "inference_seconds": 699.952,
+        "input_tokens": 381862,
+        "model_decisions": 538,
+        "output_tokens": 5685,
+        "parser_errors": 0,
+        "success_rate": 0.2,
+        "successes": 4,
+        "tasks": 20
+      }
+    }
+  },
+  "schema_version": 1,
+  "source_archive_sha256": "12d1b48fa55c55f27dfa9aa377657b2f390aa98b473048445ed08c6c0b4127f3"
+}

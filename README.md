@@ -1,6 +1,6 @@
 # Agent support research
 
-This repository starts with a reproducible **no-support baseline** for ALFWorld and TextCraft. The exploratory notebooks remain in `Support Testing/` as source material. The Python package is the experiment implementation; the Colab notebook only installs dependencies and invokes it.
+This repository starts with a reproducible **no-support baseline** for ALFWorld and TextCraft and adds an M2 action-conditioned memory path. The exploratory notebooks remain in `Support Testing/` as source material. The Python package is the experiment implementation; the Colab notebooks install dependencies and invoke it.
 
 ## Baseline decisions
 
@@ -28,12 +28,7 @@ Manifest generation fails if the requested number of distinct tasks is unavailab
 
 Use `notebooks/colab_launcher.ipynb` on a Colab GPU. It clones a configured GitHub repository, mounts Drive, installs dependencies, generates manifests if needed, and runs the baseline. The repository URL must point to this project after it is pushed to GitHub. The launcher leaves the pilot disabled until the smoke results have been reviewed.
 
-This directory is already a local Git repository on `main`. To publish it, create an empty GitHub repository without an initial README, then run from this directory:
-
-```bash
-git remote add origin https://github.com/YOUR_USERNAME/AgenticSDS.git
-git push -u origin main
-```
+The repository is published at `https://github.com/nave-nap/AgenticSDS.git`. The Colab launchers fetch a selected commit from that repository.
 
 Open the launcher notebook in Colab, select a GPU runtime, set `GITHUB_REPO`, and run the cells through the smoke test. Share the two smoke run directories from Drive for trajectory review before setting `RUN_PILOT=True`.
 
@@ -64,4 +59,6 @@ The analysis command rejects incomplete runs, mismatched task sets, and incompat
 
 ## Current execution status
 
-Local validation can run here. GPU smoke tests and pilot scores require a Colab GPU, benchmark installations/data, a GitHub copy of this repository, and a mounted Google Drive. No benchmark result should be reported until those runs complete and their trajectories have been inspected.
+The reviewed 20-task baseline pilots are frozen in [docs/baseline_pilot.json](docs/baseline_pilot.json): ALFWorld 2/20 and TextCraft 4/20. The original full trajectories remain on Drive. No baseline rerun is needed unless shared baseline behavior changes.
+
+For M2, follow [the training and retrieval protocol](docs/m2_protocol.md) and [the M2 Colab launcher](notebooks/m2_launcher.ipynb). A separate training-task corpus must be collected on a GPU before M2 can run. The development and held-out trajectories cannot enter that corpus.

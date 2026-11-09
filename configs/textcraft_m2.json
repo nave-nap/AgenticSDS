@@ -1,0 +1,14 @@
+{
+  "benchmark": "textcraft",
+  "condition": "m2_always",
+  "history_window": 8,
+  "max_actions": 30,
+  "max_decisions": 30,
+  "max_new_tokens": 100,
+  "memory_corpus": "/content/drive/MyDrive/agent_support/memory/textcraft/corpus.json",
+  "memory_index": "/content/drive/MyDrive/agent_support/memory/textcraft/index.json",
+  "memory_top_k": 3,
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "quantization": "nf4_4bit",
+  "seed": 42
+}
