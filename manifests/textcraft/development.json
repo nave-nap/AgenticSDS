@@ -1,0 +1,128 @@
+{
+  "benchmark": "textcraft",
+  "partition": "development",
+  "schema_version": 1,
+  "selection_seed": 42,
+  "tasks": [
+    {
+      "initial_observation": "Crafting commands:\ncraft 8 green stained glass pane using 8 glass pane, 1 green dye\ncraft 8 white stained glass using 8 glass, 1 white dye\ncraft 2 cyan dye using 1 blue dye, 1 green dye\ncraft 8 lime stained glass using 8 glass, 1 lime dye\ncraft 2 purple dye using 1 blue dye, 1 red dye\ncraft 1 green wool using 1 green dye, 1 white wool\ncraft 1 blue dye using 1 cornflower\ncraft 8 cyan stained glass using 8 glass, 1 cyan dye\ncraft 8 blue carpet using 8 white carpet, 1 blue dye\ncraft 8 green terracotta using 8 terracotta, 1 green dye\ncraft 1 blue dye using 1 lapis lazuli\ncraft 8 green concrete powder using 1 green dye, 4 sand, 4 gravel\ncraft 8 yellow stained glass using 8 glass, 1 yellow dye\ncraft 4 magenta dye using 1 blue dye, 2 red dye, 1 white dye\n\nGoal: craft cyan stained glass.",
+      "observation_sha256": "db4c6bf548cefe221d24372a957f6b12e1b0ef00e173695f721603ea8c2de6ee",
+      "seed": 51,
+      "task_id": "textcraft:seed:51"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 8 white concrete powder using 1 white dye, 4 sand, 4 gravel\ncraft 8 magenta concrete powder using 1 magenta dye, 4 sand, 4 gravel\ncraft 8 cyan concrete powder using 1 cyan dye, 4 sand, 4 gravel\ncraft 8 gray concrete powder using 1 gray dye, 4 sand, 4 gravel\ncraft 1 tnt using 4 sand, 5 gunpowder\ncraft 8 brown concrete powder using 1 brown dye, 4 sand, 4 gravel\ncraft 8 green concrete powder using 1 green dye, 4 sand, 4 gravel\ncraft 8 yellow concrete powder using 1 yellow dye, 4 sand, 4 gravel\ncraft 8 purple concrete powder using 1 purple dye, 4 sand, 4 gravel\ncraft 1 brown dye using 1 cocoa beans\ncraft 8 red concrete powder using 1 red dye, 4 sand, 4 gravel\ncraft 8 brown terracotta using 8 terracotta, 1 brown dye\n\nGoal: craft brown concrete powder.",
+      "observation_sha256": "7aece85d39264247a1b8bd37146936da581c5e0b68b577510e4a5393a523dda9",
+      "seed": 126,
+      "task_id": "textcraft:seed:126"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 8 gray stained glass using 8 glass, 1 gray dye\ncraft 1 beacon using 1 nether star, 5 glass, 3 obsidian\ncraft 8 white stained glass using 8 glass, 1 white dye\ncraft 8 orange stained glass using 8 glass, 1 orange dye\ncraft 3 glass bottle using 3 glass\ncraft 8 black stained glass using 8 glass, 1 black dye\ncraft 8 light blue stained glass using 8 glass, 1 light blue dye\ncraft 8 brown stained glass using 8 glass, 1 brown dye\ncraft 4 honey bottle using 1 honey block, 4 glass bottle\n\nGoal: craft honey bottle.",
+      "observation_sha256": "52e6c936aa644d643ec8b7150b06924e32bdab0034beff1fee010e2a66009f3d",
+      "seed": 137,
+      "task_id": "textcraft:seed:137"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 1 lapis block using 9 lapis lazuli\ncraft 1 blue dye using 1 lapis lazuli\ncraft 1 blue dye using 1 cornflower\ncraft 3 magenta dye using 1 blue dye, 1 red dye, 1 pink dye\ncraft 2 red dye using 1 rose bush\ncraft 8 blue concrete powder using 1 blue dye, 4 sand, 4 gravel\ncraft 1 red dye using 1 beetroot\ncraft 2 light blue dye using 1 blue dye, 1 white dye\ncraft 1 red dye using 1 red tulip\ncraft 4 magenta dye using 1 blue dye, 2 red dye, 1 white dye\ncraft 1 beetroot soup using 1 bowl, 6 beetroot\ncraft 2 purple dye using 1 blue dye, 1 red dye\ncraft 1 red dye using 1 poppy\ncraft 8 red terracotta using 8 terracotta, 1 red dye\ncraft 8 red stained glass using 8 glass, 1 red dye\ncraft 1 red bed using 1 white bed, 1 red dye\ncraft 1 blue bed using 1 white bed, 1 blue dye\n\nGoal: craft purple dye.",
+      "observation_sha256": "08e4bfe29201df577ea1478fd38623ea1de6d924a6a580f793c8e0119a628836",
+      "seed": 156,
+      "task_id": "textcraft:seed:156"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 1 light gray dye using 1 oxeye daisy\ncraft 8 gray stained glass using 8 glass, 1 gray dye\ncraft 8 light gray stained glass using 8 glass, 1 light gray dye\ncraft 1 white dye using 1 lily of the valley\ncraft 1 black dye using 1 wither rose\ncraft 2 pink dye using 1 red dye, 1 white dye\ncraft 8 light gray carpet using 8 white carpet, 1 light gray dye\ncraft 8 blue stained glass pane using 8 glass pane, 1 blue dye\ncraft 1 light gray dye using 1 azure bluet\ncraft 8 light gray stained glass pane using 8 glass pane, 1 light gray dye\ncraft 1 white dye using 1 bone meal\ncraft 8 lime stained glass using 8 glass, 1 lime dye\ncraft 8 white stained glass using 8 glass, 1 white dye\ncraft 8 brown stained glass pane using 8 glass pane, 1 brown dye\ncraft 1 light gray dye using 1 white tulip\ncraft 1 black dye using 1 ink sac\ncraft 8 white terracotta using 8 terracotta, 1 white dye\ncraft 8 black concrete powder using 1 black dye, 4 sand, 4 gravel\ncraft 2 light gray dye using 1 gray dye, 1 white dye\ncraft 3 bone meal using 1 bone\ncraft 16 glass pane using 6 glass\ncraft 2 gray dye using 1 black dye, 1 white dye\ncraft 3 light gray dye using 1 black dye, 2 white dye\ncraft 4 magenta dye using 1 blue dye, 2 red dye, 1 white dye\ncraft 16 light gray stained glass pane using 6 light gray stained glass\n\nGoal: craft light gray stained glass pane.",
+      "observation_sha256": "a7b960d0cc54326695bf59b22d83ff172dd2c10c5916e75eb1c4534320c0d453",
+      "seed": 134,
+      "task_id": "textcraft:seed:134"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 1 white wool using 4 string\ncraft 1 white dye using 1 bone meal\ncraft 1 gray bed using 1 white bed, 1 gray dye\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 8 black carpet using 8 white carpet, 1 black dye\ncraft 1 magenta bed using 3 magenta wool, 3 planks\ncraft 3 light gray dye using 1 black dye, 2 white dye\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 8 white concrete powder using 1 white dye, 4 sand, 4 gravel\ncraft 1 white bed using 3 white wool, 3 planks\ncraft 1 gray wool using 1 gray dye, 1 white wool\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 pink wool using 1 pink dye, 1 white wool\ncraft 1 white dye using 1 lily of the valley\ncraft 2 gray dye using 1 black dye, 1 white dye\ncraft 3 bone meal using 1 bone\ncraft 4 acacia planks using 1 acacia logs\ncraft 1 black dye using 1 ink sac\ncraft 4 birch planks using 1 birch logs\ncraft 1 green bed using 3 green wool, 3 planks\ncraft 6 scaffolding using 1 string, 6 bamboo\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 4 oak planks using 1 oak logs\ncraft 4 warped planks using 1 warped stems\ncraft 2 tripwire hook using 1 planks, 1 stick, 1 iron ingot\ncraft 1 black dye using 1 wither rose\ncraft 3 white carpet using 2 white wool\ncraft 1 gray bed using 3 gray wool, 3 planks\n\nGoal: craft gray bed.",
+      "observation_sha256": "0becec020be79a91a39ab6e47248d12ba68f6b4dbe9d791e43adb827a33b1f22",
+      "seed": 72,
+      "task_id": "textcraft:seed:72"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 4 oak planks using 1 oak logs\ncraft 3 oak fence using 2 stick, 4 oak planks\ncraft 1 stick using 2 bamboo\ncraft 4 crimson planks using 1 crimson stems\ncraft 4 stick using 2 planks\ncraft 1 dispenser using 1 redstone, 7 cobblestone, 1 bow\ncraft 1 dropper using 1 redstone, 7 cobblestone\ncraft 4 warped planks using 1 warped stems\ncraft 6 powered rail using 1 redstone, 1 stick, 6 gold ingot\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 acacia planks using 1 acacia logs\ncraft 1 campfire using 3 logs, 3 stick, 1 coals\ncraft 1 repeater using 2 redstone torch, 1 redstone, 3 stone\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 1 golden sword using 1 stick, 2 gold ingot\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 green bed using 3 green wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 1 green banner using 6 green wool, 1 stick\n\nGoal: craft powered rail.",
+      "observation_sha256": "0fcdcec65687226948753a703f065b3d3cbb6f5ef332d2c70df0b5d084bba63a",
+      "seed": 135,
+      "task_id": "textcraft:seed:135"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 1 lapis block using 9 lapis lazuli\ncraft 8 purple stained glass using 8 glass, 1 purple dye\ncraft 8 yellow stained glass using 8 glass, 1 yellow dye\ncraft 8 magenta stained glass pane using 8 glass pane, 1 magenta dye\ncraft 16 blue stained glass pane using 6 blue stained glass\ncraft 2 light blue dye using 1 blue dye, 1 white dye\ncraft 1 blue dye using 1 lapis lazuli\ncraft 1 blue dye using 1 cornflower\ncraft 2 purple dye using 1 blue dye, 1 red dye\ncraft 8 cyan stained glass using 8 glass, 1 cyan dye\ncraft 8 blue stained glass using 8 glass, 1 blue dye\ncraft 1 blue wool using 1 blue dye, 1 white wool\ncraft 8 blue terracotta using 8 terracotta, 1 blue dye\ncraft 8 blue stained glass pane using 8 glass pane, 1 blue dye\ncraft 16 glass pane using 6 glass\ncraft 8 white stained glass pane using 8 glass pane, 1 white dye\n\nGoal: craft blue stained glass pane.",
+      "observation_sha256": "35fc1a0003020ae065f67d1d3b7a3734f5428895f79d7245add02662c94dd4d1",
+      "seed": 129,
+      "task_id": "textcraft:seed:129"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 1 brown dye using 1 cocoa beans\ncraft 8 orange terracotta using 8 terracotta, 1 orange dye\ncraft 8 brown stained glass pane using 8 glass pane, 1 brown dye\ncraft 8 yellow terracotta using 8 terracotta, 1 yellow dye\ncraft 8 brown terracotta using 8 terracotta, 1 brown dye\ncraft 8 lime terracotta using 8 terracotta, 1 lime dye\ncraft 8 brown concrete powder using 1 brown dye, 4 sand, 4 gravel\ncraft 8 cookie using 2 wheat, 1 cocoa beans\ncraft 8 brown stained glass using 8 glass, 1 brown dye\ncraft 1 brown bed using 1 white bed, 1 brown dye\ncraft 8 brown carpet using 8 white carpet, 1 brown dye\ncraft 8 blue terracotta using 8 terracotta, 1 blue dye\n\nGoal: craft brown terracotta.",
+      "observation_sha256": "4fbe1b4106eba405319e60a6fc84adef07afc3539b2c6c594d0d9b1d369595a0",
+      "seed": 138,
+      "task_id": "textcraft:seed:138"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 2 spectral arrow using 4 glowstone dust, 1 arrow\ncraft 1 glowstone using 4 glowstone dust\ncraft 1 dropper using 1 redstone, 7 cobblestone\ncraft 1 repeater using 2 redstone torch, 1 redstone, 3 stone\ncraft 1 target using 1 hay block, 4 redstone\ncraft 1 redstone lamp using 4 redstone, 1 glowstone\ncraft 1 redstone block using 9 redstone\ncraft 6 detector rail using 1 redstone, 1 stone pressure plate, 6 iron ingot\ncraft 1 clock using 4 gold ingot, 1 redstone\ncraft 1 dispenser using 1 redstone, 7 cobblestone, 1 bow\ncraft 1 redstone torch using 1 stick, 1 redstone\ncraft 1 respawn anchor using 6 crying obsidian, 3 glowstone\n\nGoal: craft redstone lamp.",
+      "observation_sha256": "c93f6fec100bee4a5058c6262866c4521702dd906e3a76974032fb2cea150f84",
+      "seed": 151,
+      "task_id": "textcraft:seed:151"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 1 dark prismarine using 8 prismarine shard, 1 black dye\ncraft 1 black bed using 1 white bed, 1 black dye\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 1 black dye using 1 wither rose\ncraft 8 black carpet using 8 white carpet, 1 black dye\ncraft 4 crimson planks using 1 crimson stems\ncraft 4 acacia planks using 1 acacia logs\ncraft 3 birch sign using 6 birch planks, 1 stick\ncraft 3 white carpet using 2 white wool\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 light gray wool using 1 light gray dye, 1 white wool\ncraft 4 oak planks using 1 oak logs\ncraft 4 stick using 2 planks\ncraft 1 stick using 2 bamboo\ncraft 1 white wool using 4 string\ncraft 1 brown wool using 1 brown dye, 1 white wool\ncraft 3 oak sign using 6 oak planks, 1 stick\ncraft 4 birch planks using 1 birch logs\ncraft 1 black dye using 1 ink sac\ncraft 4 spruce planks using 1 spruce logs\ncraft 1 black wool using 1 black dye, 1 white wool\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 warped planks using 1 warped stems\ncraft 8 black stained glass using 8 glass, 1 black dye\ncraft 1 black banner using 6 black wool, 1 stick\n\nGoal: craft black banner.",
+      "observation_sha256": "96e9689fcf3129ee4b92e7931f143b3807c0bed230a103aaa5a0c30c5d378df3",
+      "seed": 89,
+      "task_id": "textcraft:seed:89"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 6 mossy stone brick slab using 3 mossy stone bricks\ncraft 1 stone pressure plate using 2 stone\ncraft 4 stone brick stairs using 6 stone bricks\ncraft 6 stone slab using 3 stone\ncraft 1 mossy cobblestone using 1 cobblestone, 1 vine\ncraft 1 stone button using 1 stone\ncraft 6 mossy stone brick wall using 6 mossy stone bricks\ncraft 4 mossy stone brick stairs using 6 mossy stone bricks\ncraft 1 stonecutter using 1 iron ingot, 3 stone\ncraft 6 stone brick slab using 3 stone bricks\ncraft 4 stone bricks using 4 stone\ncraft 1 mossy stone bricks using 1 stone bricks, 1 vine\ncraft 6 stone brick wall using 6 stone bricks\n\nGoal: craft mossy stone brick slab.",
+      "observation_sha256": "1975d090c2b7ba5fc70bcc764f21cbea8f01676e4d8b9fd7d93b2d8f796a654c",
+      "seed": 121,
+      "task_id": "textcraft:seed:121"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+      "observation_sha256": "2eba83c81f6df38ca3780e05b7f12f6e29c755ad546219254175d7432c7c3a7f",
+      "seed": 130,
+      "task_id": "textcraft:seed:130"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 1 green wool using 1 green dye, 1 white wool\ncraft 1 purple bed using 1 white bed, 1 purple dye\ncraft 4 warped planks using 1 warped stems\ncraft 8 green stained glass using 8 glass, 1 green dye\ncraft 1 wooden hoe using 2 stick, 2 planks\ncraft 1 barrel using 6 planks, 2 wooden slabs\ncraft 1 light blue wool using 1 light blue dye, 1 white wool\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 1 lime wool using 1 lime dye, 1 white wool\ncraft 4 oak planks using 1 oak logs\ncraft 4 acacia planks using 1 acacia logs\ncraft 1 white bed using 3 white wool, 3 planks\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 white wool using 4 string\ncraft 8 green concrete powder using 1 green dye, 4 sand, 4 gravel\ncraft 4 birch planks using 1 birch logs\ncraft 4 spruce planks using 1 spruce logs\ncraft 1 green bed using 1 white bed, 1 green dye\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 pink bed using 1 white bed, 1 pink dye\ncraft 1 green bed using 3 green wool, 3 planks\ncraft 1 green banner using 6 green wool, 1 stick\ncraft 2 lime dye using 1 green dye, 1 white dye\n\nGoal: craft green bed.",
+      "observation_sha256": "0659595c01a4b023f7611f6033eead5c5a2ca962b8b9858232d1f9d31fa4eff2",
+      "seed": 74,
+      "task_id": "textcraft:seed:74"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 1 yellow wool using 1 yellow dye, 1 white wool\ncraft 4 oak planks using 1 oak logs\ncraft 1 orange wool using 1 orange dye, 1 white wool\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 purple bed using 1 white bed, 1 purple dye\ncraft 1 red wool using 1 red dye, 1 white wool\ncraft 1 white wool using 4 string\ncraft 1 white bed using 3 white wool, 3 planks\ncraft 1 pink wool using 1 pink dye, 1 white wool\ncraft 1 green bed using 3 green wool, 3 planks\ncraft 1 red bed using 1 white bed, 1 red dye\ncraft 1 red dye using 1 red tulip\ncraft 1 light blue wool using 1 light blue dye, 1 white wool\ncraft 4 spruce planks using 1 spruce logs\ncraft 2 red dye using 1 rose bush\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 warped planks using 1 warped stems\ncraft 4 birch planks using 1 birch logs\ncraft 1 black bed using 1 white bed, 1 black dye\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 1 red dye using 1 beetroot\ncraft 1 red dye using 1 poppy\ncraft 1 red bed using 3 red wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 1 bow using 3 stick, 3 string\n\nGoal: craft red bed.",
+      "observation_sha256": "816b3d4b068d0dd2748b62f1725484f5a4e118af802c23256988c8f1df867668",
+      "seed": 58,
+      "task_id": "textcraft:seed:58"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 8 black carpet using 8 white carpet, 1 black dye\ncraft 2 gray dye using 1 black dye, 1 white dye\ncraft 1 purple wool using 1 purple dye, 1 white wool\ncraft 3 white carpet using 2 white wool\ncraft 1 light gray wool using 1 light gray dye, 1 white wool\ncraft 1 brown wool using 1 brown dye, 1 white wool\ncraft 6 scaffolding using 1 string, 6 bamboo\ncraft 1 white bed using 3 white wool, 3 planks\ncraft 8 red carpet using 8 white carpet, 1 red dye\ncraft 1 white wool using 4 string\ncraft 3 black carpet using 2 black wool\ncraft 1 black wool using 1 black dye, 1 white wool\ncraft 8 green carpet using 8 white carpet, 1 green dye\ncraft 1 light blue wool using 1 light blue dye, 1 white wool\ncraft 1 loom using 2 planks, 2 string\ncraft 1 black dye using 1 ink sac\ncraft 1 black dye using 1 wither rose\n\nGoal: craft black carpet.",
+      "observation_sha256": "defd8a553698fcd61580486f287ed6527263ac3ea16e7c0919507dd15fda7815",
+      "seed": 104,
+      "task_id": "textcraft:seed:104"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 1 acacia boat using 5 acacia planks\ncraft 1 acacia fence gate using 4 stick, 2 acacia planks\ncraft 6 acacia slab using 3 acacia planks\ncraft 3 acacia sign using 6 acacia planks, 1 stick\ncraft 3 acacia fence using 2 stick, 4 acacia planks\ncraft 4 acacia stairs using 6 acacia planks\ncraft 3 acacia door using 6 acacia planks\ncraft 4 acacia planks using 1 acacia logs\n\nGoal: craft acacia door.",
+      "observation_sha256": "52a6dfdcb4e7f94e8fbece737a6a72b08a18525431f6c12f9d74e884b71fcce7",
+      "seed": 124,
+      "task_id": "textcraft:seed:124"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 4 stick using 2 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 oak planks using 1 oak logs\ncraft 1 stick using 2 bamboo\ncraft 1 yellow bed using 3 yellow wool, 3 planks\ncraft 1 grindstone using 2 stick, 1 stone slab, 2 planks\ncraft 4 warped planks using 1 warped stems\ncraft 1 redstone torch using 1 stick, 1 redstone\ncraft 4 birch planks using 1 birch logs\ncraft 1 white bed using 3 white wool, 3 planks\ncraft 2 tripwire hook using 1 planks, 1 stick, 1 iron ingot\ncraft 1 acacia fence gate using 4 stick, 2 acacia planks\ncraft 3 dark oak sign using 6 dark oak planks, 1 stick\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 jungle planks using 1 jungle logs\ncraft 6 oak slab using 3 oak planks\ncraft 1 oak button using 1 oak planks\ncraft 1 jungle fence gate using 4 stick, 2 jungle planks\ncraft 1 oak fence gate using 4 stick, 2 oak planks\n\nGoal: craft oak fence gate.",
+      "observation_sha256": "70d6c9158b8022b266c4f80ad7ab32fb6aa78152e8bc6c77e666299236184ad3",
+      "seed": 139,
+      "task_id": "textcraft:seed:139"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 1 green bed using 3 green wool, 3 planks\ncraft 1 purple wool using 1 purple dye, 1 white wool\ncraft 1 gray wool using 1 gray dye, 1 white wool\ncraft 8 blue carpet using 8 white carpet, 1 blue dye\ncraft 8 green carpet using 8 white carpet, 1 green dye\ncraft 1 fishing rod using 3 stick, 2 string\ncraft 8 gray carpet using 8 white carpet, 1 gray dye\ncraft 8 green stained glass pane using 8 glass pane, 1 green dye\ncraft 1 cyan wool using 1 cyan dye, 1 white wool\ncraft 3 green carpet using 2 green wool\ncraft 1 white wool using 4 string\ncraft 8 green concrete powder using 1 green dye, 4 sand, 4 gravel\ncraft 1 green bed using 1 white bed, 1 green dye\ncraft 3 white carpet using 2 white wool\ncraft 1 green wool using 1 green dye, 1 white wool\n\nGoal: craft green carpet.",
+      "observation_sha256": "8bfacb344e9068111815299947e11bdaf7ec1112ba3529d62ca879f8841f8914",
+      "seed": 93,
+      "task_id": "textcraft:seed:93"
+    },
+    {
+      "initial_observation": "Crafting commands:\ncraft 1 comparator using 3 redstone torch, 1 quartz, 3 stone\ncraft 1 mossy cobblestone using 1 cobblestone, 1 vine\ncraft 6 mossy stone brick wall using 6 mossy stone bricks\ncraft 1 stonecutter using 1 iron ingot, 3 stone\ncraft 4 stone bricks using 4 stone\ncraft 6 stone slab using 3 stone\ncraft 1 stone pressure plate using 2 stone\ncraft 1 repeater using 2 redstone torch, 1 redstone, 3 stone\ncraft 6 mossy stone brick slab using 3 mossy stone bricks\ncraft 4 mossy stone brick stairs using 6 mossy stone bricks\ncraft 1 mossy stone bricks using 1 stone bricks, 1 vine\ncraft 1 stone button using 1 stone\ncraft 6 stone brick wall using 6 stone bricks\n\nGoal: craft mossy stone brick wall.",
+      "observation_sha256": "df5d7f3da347fc39dfa91a50d9b4c80e606f9503b69b1c149cadfb3646cb444f",
+      "seed": 110,
+      "task_id": "textcraft:seed:110"
+    }
+  ]
+}
