@@ -91,3 +91,7 @@ about identical configurations and Git commits.
 
 The local repository cannot perform the training and M2 runs without a CUDA GPU and the
 benchmark installations. The notebook leaves all run flags off by default.
+
+For a training-only next-action diagnostic with genuine cross-task successful
+sequences, see [the sequence-memory probe](memory_probe.md). It is separate
+from the frozen M2 pilot and does not produce a development accuracy result.
