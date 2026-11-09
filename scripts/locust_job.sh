@@ -2,6 +2,7 @@
 #SBATCH --job-name=agent-support
 #SBATCH --output=slurm-%j.out
 set -euo pipefail
+umask 077
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${AGENT_SUPPORT_DATA:?Export AGENT_SUPPORT_DATA to the transferred data directory}"

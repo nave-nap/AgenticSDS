@@ -2,6 +2,8 @@
 
 The cluster workflow uses the same Python runner as Colab. Evan's account is on Penn's Locust cluster at `locust-login.seas.upenn.edu`. SSH uses the PennKey username `evanpan`, password, and two-factor authentication. Off campus, connect to the [Penn VPN](https://hpc.engineering.upenn.edu/using-penn-vpn-to-access-resources/) first. The Slurm partition, account, Python module, and GPU model must be checked from the account's allocation. Slurm's [official `sbatch` documentation](https://slurm.schedmd.com/sbatch.html) describes the resource flags used here.
 
+The repository is already public on GitHub. The experiment data bundle is ignored by Git. The setup below makes its directory and the cloned working directory owner-only, so ordinary cluster users should not be able to open the data or job logs through filesystem permissions. Cluster administrators may still access files, and Slurm may show other users basic job metadata such as account name, job name, and state. Check the actual directory permissions after transfer with `ls -ld "$HOME/agent_support_data" "$HOME/AgenticSDS"`.
+
 ## 1. Transfer the frozen inputs
 
 The user's existing downloads contain the full baseline results and full training runs. `manifests/alfworld/heldout.json` must also be downloaded from `MyDrive/agent_support/manifests/alfworld/heldout.json`. From this repository on the local computer:
@@ -23,16 +25,18 @@ LOCUST_LOGIN='evanpan@locust-login.seas.upenn.edu'
 scp -r data/locust_transfer "$LOCUST_LOGIN:~/agent_support_data"
 ```
 
-No Google Drive mount is needed on the cluster. If `scp` is unavailable, use the cluster's approved file-transfer method to place this directory at the same destination. Do not put the downloaded results or Hugging Face cache in Git.
+After logging in, restrict access to the transferred directory with `chmod 700 "$HOME/agent_support_data"`. No Google Drive mount is needed on the cluster. If `scp` is unavailable, use the cluster's approved file-transfer method to place this directory at the same destination. Do not put the downloaded results or Hugging Face cache in Git.
 
 ## 2. Install the code and benchmark data
 
 Log in with `ssh evanpan@locust-login.seas.upenn.edu`. On the cluster login node, clone the published repository and select the cluster-workflow commit (shown in the setup handoff). Select a Python/CUDA module supported by Locust; if Python 3.13.16 and the frozen baseline package versions are unavailable, plan a new 20-task cluster baseline for each benchmark before comparing success rates.
 
 ```bash
+umask 077
 git clone https://github.com/nave-nap/AgenticSDS.git
 cd AgenticSDS
 git checkout CLUSTER_WORKFLOW_COMMIT
+chmod 700 "$HOME/AgenticSDS" "$HOME/agent_support_data"
 PYTHON_BIN=python3.13 bash scripts/locust_install.sh
 export AGENT_SUPPORT_DATA="$HOME/agent_support_data"
 export ALFWORLD_DATA="$HOME/.cache/alfworld"

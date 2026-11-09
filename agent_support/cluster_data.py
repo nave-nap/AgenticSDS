@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import tempfile
 import zipfile
@@ -102,6 +103,7 @@ def prepare(training_archive: str | Path, baseline_archive: str | Path,
                               root / "manifests" / benchmark / "heldout.json"])
             training[benchmark] = {"run_id": directory.name, "successful_trajectories": len(corpus["records"])}
         root.rename(output)
+        os.chmod(output, 0o700)
     return {"data_root": str(output), "training": training,
             "baseline_runs": {key: frozen[key]["run_id"] for key in frozen}}
 
