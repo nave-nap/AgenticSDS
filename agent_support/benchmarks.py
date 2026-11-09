@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .common import digest_text
 from .manifests import alfworld_data_root, load_alfworld_config, textcraft_environment
+from .textworld_compat import install_if_needed
 
 
 class TextCraftEpisode:
@@ -45,6 +46,8 @@ class TextCraftEpisode:
 class ALFWorldEpisode:
     def __init__(self, task: dict, config_path: str):
         from alfworld.agents.environment import get_environment
+
+        install_if_needed()
 
         self.task = task
         self.config = load_alfworld_config(config_path)

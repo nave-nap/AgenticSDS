@@ -19,7 +19,7 @@ from .policy import alfworld_messages, parse_alfworld, parse_textcraft, textcraf
 
 
 def package_versions() -> dict:
-    names = ("torch", "transformers", "accelerate", "bitsandbytes", "alfworld", "textcraft")
+    names = ("torch", "transformers", "accelerate", "bitsandbytes", "alfworld", "textworld", "textcraft")
     versions = {}
     for name in names:
         try:

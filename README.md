@@ -9,6 +9,7 @@ This repository starts with a reproducible **no-support baseline** for ALFWorld 
 - TextCraft: the original single-command policy and prompt. It includes the later parser correction for underscores and rejects `using` in `get` commands. The later prompt expansion and persistent failure summary are excluded because they alter agent behavior.
 - Parse errors consume a model decision but not an environment action. Both counts are recorded. The baseline ends at `max_decisions` or `max_actions`, whichever comes first.
 - ALFWorld retains the original repeated two-action loop stop after six actions. Environment step errors end an episode and are recorded in its trace.
+- On Python 3.13+, the ALFWorld adapter applies a scoped TextWorld 1.7.0 grammar compatibility fix: game variables are passed explicitly to expression evaluation. This addresses a `NameError: name 'r' is not defined` seen during `env.reset()`; it does not change the game files or agent policy.
 - The same finalized parsing and harness must be used for any later support condition. If the harness changes, rerun the baseline.
 
 ## Reproducibility

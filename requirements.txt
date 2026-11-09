@@ -4,3 +4,4 @@ accelerate>=1,<2
 bitsandbytes>=0.45,<1
 textcraft==0.0.3
 alfworld
+textworld==1.7.0

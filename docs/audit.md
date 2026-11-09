@@ -6,6 +6,8 @@ The notebook installs ALFWorld, downloads benchmark data, loads `AlfredTWEnv` fr
 
 We retain the numbered action policy and its task prompt. We use exact game-file manifests, verify the game identity at reset, and apply the eight-action history window. The ReAct branch stays in the exploratory notebook.
 
+The first Colab smoke attempt on Python 3.13 revealed a TextWorld 1.7.0 grammar failure during `env.reset()`: `EvalSymbol.derive` mutates `locals()` and then calls `eval`, leaving game variable `r` unavailable. Python 3.13 changed function-local namespace behavior. The adapter now passes the same grammar module globals and game variables as an explicit evaluation namespace. The compatibility code is isolated in `agent_support/textworld_compat.py` and used only on Python 3.13+.
+
 ## TextCraft
 
 The notebook uses `textcraft==0.0.3`, a fresh `TextCraft` environment per episode, Qwen2.5-7B-Instruct in NF4, a fixed 30-decision loop, a command parser, JSON trajectories, and Drive storage. It creates a seed/initial-observation manifest. A later cell rebuilds the manifest in fresh environments and checks identity, demonstrating that repeated seeds alone cannot be trusted. The final two cells patch the parser, expand the system prompt, and add a persistent failure summary. Those changes make the notebook's behavior dependent on cell order.
