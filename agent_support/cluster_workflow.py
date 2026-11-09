@@ -77,7 +77,7 @@ def preflight(root: Path, benchmark: str, require_gpu: bool = False) -> dict:
     training = training_run(root, benchmark)
     frozen_baseline(root, benchmark)
     if benchmark == "alfworld":
-        data = Path(os.environ.get("ALFWORLD_DATA", str(Path.home() / ".cache" / "alfworld")))
+        data = Path(os.environ.get("ALFWORLD_DATA", str(root / "alfworld")))
         for relative in ("json_2.1.1/train", "json_2.1.1/valid_seen", "logic/alfred.pddl"):
             if not (data / relative).exists():
                 raise FileNotFoundError(f"ALFWorld benchmark data missing: {data / relative}")
@@ -86,9 +86,14 @@ def preflight(root: Path, benchmark: str, require_gpu: bool = False) -> dict:
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA GPU is unavailable in this job; request a Slurm GPU allocation")
     mismatches = frozen_compatibility(root, benchmark)
+    home = Path.home().resolve()
+    storage = {"data_root": root, "alfworld_data": Path(os.environ.get("ALFWORLD_DATA", str(root / "alfworld"))),
+               "model_cache": Path(os.environ.get("HF_HOME", str(root / "hf_cache")))}
+    home_paths = [name for name, path in storage.items() if path.expanduser().resolve().is_relative_to(home)]
     return {"benchmark": benchmark, "training_run": training.name,
             "frozen_baseline_compatible": not mismatches,
-            "frozen_baseline_mismatches": mismatches}
+            "frozen_baseline_mismatches": mismatches,
+            "home_resident_storage": home_paths}
 
 
 def build_memory(root: Path, benchmark: str) -> dict:
