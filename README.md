@@ -27,6 +27,15 @@ Manifest generation fails if the requested number of distinct tasks is unavailab
 
 Use `notebooks/colab_launcher.ipynb` on a Colab GPU. It clones a configured GitHub repository, mounts Drive, installs dependencies, generates manifests if needed, and runs the baseline. The repository URL must point to this project after it is pushed to GitHub. The launcher leaves the pilot disabled until the smoke results have been reviewed.
 
+This directory is already a local Git repository on `main`. To publish it, create an empty GitHub repository without an initial README, then run from this directory:
+
+```bash
+git remote add origin https://github.com/YOUR_USERNAME/AgenticSDS.git
+git push -u origin main
+```
+
+Open the launcher notebook in Colab, select a GPU runtime, set `GITHUB_REPO`, and run the cells through the smoke test. Share the two smoke run directories from Drive for trajectory review before setting `RUN_PILOT=True`.
+
 Command line after setup:
 
 ```bash
