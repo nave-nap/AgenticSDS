@@ -60,9 +60,19 @@ runs only on the same development task manifest, model settings, benchmark
 versions, and action budget. If a shared baseline behavior bug is fixed,
 rerun the baseline before comparison.
 
-The current `agent_support.analysis` command still enforces identical baseline
-configurations. Paired baseline-versus-M2 analysis is the later comparison
-step; it should not be run through that baseline-only command yet.
+The paired comparison command checks the exact full development manifest,
+baseline agent settings, Python and benchmark versions, and source benchmark
+configuration hashes. It records both Git commits because the M2 runner was
+added after the frozen baseline. It reports helped and hurt tasks, action and
+token changes, extra model calls, and support hit rate:
+
+```bash
+python3 -m agent_support.analysis BASELINE_RUN_DIR M2_RUN_DIR \
+  --support-comparison --output comparison.json
+```
+
+The baseline-to-baseline command without `--support-comparison` remains strict
+about identical configurations and Git commits.
 
 ## Execution order
 
@@ -74,6 +84,10 @@ step; it should not be run through that baseline-only command yet.
 4. Enable `BUILD_MEMORY`, build and inspect both corpus and index files.
 5. Enable `RUN_M2_SMOKE`, run three development tasks per benchmark, and
    inspect the full traces before a 20-task supported pilot.
+6. Enable `RUN_M2_PILOT` with training, memory building, and smoke flags off.
+   Run all 20 development tasks for both benchmarks on the frozen manifest.
+7. Enable `RUN_M2_COMPARE` to write paired comparison JSON files to Drive.
+   Inspect trajectories before drawing conclusions from the aggregate scores.
 
-The local repository cannot perform steps 3–5 without a CUDA GPU and the
+The local repository cannot perform the training and M2 runs without a CUDA GPU and the
 benchmark installations. The notebook leaves all run flags off by default.

@@ -57,6 +57,8 @@ python3 -m agent_support.analysis RUN_DIR_A RUN_DIR_B
 
 The analysis command rejects incomplete runs, mismatched task sets, and incompatible settings. It reports success, environment actions, model decisions, tokens, failed actions, and per-task differences. It does not silently compare smoke runs to pilots.
 
+For a full development baseline versus M2 run, use `python3 -m agent_support.analysis BASELINE_RUN_DIR M2_RUN_DIR --support-comparison --output comparison.json`. This accepts the support-only config keys and different Git commits while requiring the same full task manifest, model settings, action budget, and benchmark package versions. It reports paired helped/hurt tasks and support cost.
+
 ## Current execution status
 
 The reviewed 20-task baseline pilots are frozen in [docs/baseline_pilot.json](docs/baseline_pilot.json): ALFWorld 2/20 and TextCraft 4/20. The original full trajectories remain on Drive. No baseline rerun is needed unless shared baseline behavior changes.
