@@ -1,6 +1,6 @@
 # Agent support research
 
-This repository starts with a reproducible **no-support baseline** for ALFWorld and TextCraft and adds an M2 action-conditioned memory path. The exploratory notebooks remain in `Support Testing/` as source material. The Python package is the experiment implementation; the Colab notebooks install dependencies and invoke it.
+This repository starts with a reproducible **no-support baseline** for ALFWorld and TextCraft and adds support conditions for paired evaluation. The exploratory notebooks remain in `Support Testing/` as source material. The Python package is the experiment implementation; the Colab notebooks install dependencies and invoke it.
 
 ## Baseline decisions
 
@@ -64,3 +64,5 @@ For a full development baseline versus M2 run, use `python3 -m agent_support.ana
 The reviewed 20-task baseline pilots are frozen in [docs/baseline_pilot.json](docs/baseline_pilot.json): ALFWorld 2/20 and TextCraft 4/20. The original full trajectories remain on Drive. No baseline rerun is needed unless shared baseline behavior changes.
 
 For M2, follow [the training and retrieval protocol](docs/m2_protocol.md) and [the M2 Colab launcher](notebooks/m2_launcher.ipynb). A separate training-task corpus must be collected on a GPU before M2 can run. The development and held-out trajectories cannot enter that corpus.
+
+The next memory experiment uses [successful-trajectory retrieval and action-conditioned M2](docs/trajectory_memory_protocol.md). Its [separate Colab launcher](notebooks/trajectory_memory_launcher.ipynb) reuses the completed training runs, builds one MPNet-indexed corpus per benchmark, then evaluates a retrieval-only ExpeL adaptation and a proposed-action variant against the frozen baseline. These conditions are `expel_retrieval_only_v1` and `m2_trajectory_v1`; they do not overwrite `m2_always` or its results. Local contract tests can run without a GPU; the new smoke and pilot runs still require GPU compute.

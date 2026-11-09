@@ -13,14 +13,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .benchmarks import make_episode
-from .common import canonical_digest, read_json, validate_config, validate_manifest, write_json_atomic
+from .common import TRAJECTORY_CONDITIONS, canonical_digest, read_json, validate_config, validate_manifest, write_json_atomic
 from .model import QwenModel
 from .policy import alfworld_messages, parse_alfworld, parse_textcraft, textcraft_messages
 from .memory import ActionMemory, RETRIEVAL_POLICY, SentenceEmbedder, support_messages
+from .trajectory_memory import MPNetEmbedder, POLICY as TRAJECTORY_POLICY, TrajectoryMemory, memory_messages
 
 
 def package_versions() -> dict:
-    names = ("torch", "transformers", "accelerate", "bitsandbytes", "alfworld", "textworld", "textcraft")
+    names = ("torch", "transformers", "sentence-transformers", "accelerate", "bitsandbytes", "alfworld", "textworld", "textcraft")
     versions = {}
     for name in names:
         try:
@@ -36,7 +37,8 @@ def git_commit() -> str | None:
 
 
 def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory=make_episode,
-                support: ActionMemory | None = None) -> dict:
+                support: ActionMemory | None = None,
+                trajectory_support: TrajectoryMemory | None = None) -> dict:
     episode = episode_factory(benchmark, task, config)
     started = time.perf_counter()
     history: list[dict] = []
@@ -52,6 +54,11 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
     success = False
     try:
         episode.reset()
+        task_hits = []
+        if trajectory_support is not None and config["condition"] == "expel_retrieval_only_v1":
+            task_hits, retrieval_time = trajectory_support.retrieve(benchmark, episode.task_prompt)
+            support_calls += 1
+            retrieval_seconds += retrieval_time
         for decision in range(1, config["max_decisions"] + 1):
             if actions_taken >= config["max_actions"]:
                 status = "max_actions"
@@ -65,6 +72,8 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
             else:
                 available = None
                 messages = textcraft_messages(episode.initial_observation, history, config["history_window"])
+            if trajectory_support is not None and config["condition"] == "expel_retrieval_only_v1":
+                messages = memory_messages(messages, task_hits)
             generation = model.generate(messages)
             input_tokens += generation["input_tokens"]
             output_tokens += generation["output_tokens"]
@@ -81,6 +90,15 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                 "output_tokens": generation["output_tokens"],
                 "inference_seconds": generation["inference_seconds"],
             }
+            if trajectory_support is not None and config["condition"] == "expel_retrieval_only_v1":
+                record["support"] = {"mechanism": "expel_retrieval_only_adaptation",
+                                     "selection_policy": TRAJECTORY_POLICY,
+                                     "retrieval_seconds": retrieval_seconds if decision == 1 else 0.0,
+                                     "retrieval_event": decision == 1,
+                                     "retrieved": task_hits,
+                                     "action_changed": False}
+                if not task_hits:
+                    record["support"]["fallback_reason"] = "no_trajectory_within_budget"
             if action is not None and support is not None:
                 proposed_action = action
                 hits, retrieval_time = support.retrieve(benchmark, episode.task_prompt, episode.observation, action)
@@ -123,6 +141,47 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                     record["support"]["action_changed"] = action != proposed_action
                 else:
                     record["support"]["fallback_reason"] = "no_relevant_memory"
+            if (action is not None and trajectory_support is not None
+                    and config["condition"] == "m2_trajectory_v1"):
+                proposed_action = action
+                hits, retrieval_time = trajectory_support.retrieve(
+                    benchmark, episode.task_prompt, episode.observation, proposed_action)
+                support_calls += 1
+                retrieval_seconds += retrieval_time
+                record["proposed_action"] = proposed_action
+                record["proposal_raw_model_output"] = raw
+                record["support"] = {"mechanism": "m2_trajectory_memory",
+                                     "selection_policy": TRAJECTORY_POLICY,
+                                     "retrieval_seconds": retrieval_time,
+                                     "retrieval_event": True,
+                                     "retrieved": hits, "action_changed": False}
+                if hits:
+                    revision = model.generate(memory_messages(messages, hits, proposed_action))
+                    support_model_calls += 1
+                    support_input_tokens += revision["input_tokens"]
+                    support_output_tokens += revision["output_tokens"]
+                    input_tokens += revision["input_tokens"]
+                    output_tokens += revision["output_tokens"]
+                    inference_seconds += revision["inference_seconds"]
+                    record["input_tokens"] += revision["input_tokens"]
+                    record["output_tokens"] += revision["output_tokens"]
+                    record["inference_seconds"] = round(record["inference_seconds"] + revision["inference_seconds"], 3)
+                    record["support"].update({"raw_model_output": revision["text"],
+                                              "input_tokens": revision["input_tokens"],
+                                              "output_tokens": revision["output_tokens"],
+                                              "inference_seconds": revision["inference_seconds"]})
+                    revised = (parse_alfworld(revision["text"], available) if benchmark == "alfworld"
+                               else parse_textcraft(revision["text"]))
+                    if revised is not None:
+                        action = revised
+                        record["action"] = action
+                        record["raw_model_output"] = revision["text"]
+                    else:
+                        record["support"]["parse_error"] = True
+                        support_parse_errors += 1
+                    record["support"]["action_changed"] = action != proposed_action
+                else:
+                    record["support"]["fallback_reason"] = "no_trajectory_within_budget"
             if action is None:
                 parser_errors += 1
                 record["error"] = "parse_error"
@@ -181,7 +240,7 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
         "elapsed_seconds": round(time.perf_counter() - started, 3),
         "trace": trace,
     }
-    if support is not None:
+    if support is not None or trajectory_support is not None:
         result.update({"model_calls": len(trace) + support_model_calls,
                        "support_calls": support_calls, "support_model_calls": support_model_calls,
                        "support_input_tokens": support_input_tokens, "support_output_tokens": support_output_tokens,
@@ -219,15 +278,22 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         raise ValueError("limit must be positive")
     selected = manifest["tasks"][:limit] if limit is not None else manifest["tasks"]
     corpus = index_data = None
-    if config["condition"] == "m2_always":
-        corpus = read_json(config["memory_corpus"])
-        index_data = read_json(config["memory_index"])
+    if config["condition"] == "m2_always" or config["condition"] in TRAJECTORY_CONDITIONS:
+        trajectory_condition = config["condition"] in TRAJECTORY_CONDITIONS
+        corpus = read_json(config["trajectory_corpus"] if trajectory_condition else config["memory_corpus"])
+        index_data = read_json(config["trajectory_index"] if trajectory_condition else config["memory_index"])
         if canonical_digest(manifest) not in corpus.get("excluded_manifest_sha256", {}).values():
             raise ValueError("Memory corpus was not built with this evaluation manifest excluded")
         selected_ids = {task["task_id"] for task in selected}
         if any(record["benchmark"] == manifest["benchmark"] and record["task_id"] in selected_ids
                for record in corpus["records"]):
             raise ValueError("Memory corpus contains evaluation task trajectories")
+        if trajectory_condition:
+            fingerprint = "game_sha256" if manifest["benchmark"] == "alfworld" else "observation_sha256"
+            selected_hashes = {task[fingerprint] for task in selected}
+            if any(record["benchmark"] == manifest["benchmark"]
+                   and record["task_fingerprint"] in selected_hashes for record in corpus["records"]):
+                raise ValueError("Trajectory corpus contains evaluation task content")
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
     directory = Path(output_root) / f"{manifest['benchmark']}_{run_id}"
     directory.mkdir(parents=True, exist_ok=False)
@@ -272,6 +338,10 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         metadata["memory_corpus_sha256"] = canonical_digest(corpus)
         metadata["memory_index_sha256"] = canonical_digest(index_data)
         metadata["memory_selection_policy"] = RETRIEVAL_POLICY
+    elif config["condition"] in TRAJECTORY_CONDITIONS:
+        metadata["trajectory_corpus_sha256"] = canonical_digest(corpus)
+        metadata["trajectory_index_sha256"] = canonical_digest(index_data)
+        metadata["memory_selection_policy"] = TRAJECTORY_POLICY
     write_json_atomic(directory / "run.json", metadata)
     episodes = []
     try:
@@ -281,8 +351,20 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
                                                  revision=index_data.get("embedding_revision")),
                                 config["memory_top_k"])
                    if config["condition"] == "m2_always" else None)
+        trajectory_support = None
+        if config["condition"] in TRAJECTORY_CONDITIONS:
+            tokenizer = getattr(actual_model, "tokenizer", None)
+            token_counter = (lambda value: len(tokenizer.encode(value, add_special_tokens=False))
+                             if tokenizer is not None else len(value.split()))
+            trajectory_support = TrajectoryMemory(
+                corpus, index_data,
+                MPNetEmbedder(index_data["embedding_model"],
+                              revision=index_data.get("embedding_revision")),
+                config["trajectory_top_k"], config["trajectory_token_budget"], token_counter)
         for index, task in enumerate(selected):
-            result = run_episode(manifest["benchmark"], task, config, actual_model, episode_factory, support=support)
+            result = run_episode(manifest["benchmark"], task, config, actual_model,
+                                 episode_factory, support=support,
+                                 trajectory_support=trajectory_support)
             filename = f"{index:04d}_{canonical_digest(task['task_id'])[:12]}.json"
             write_json_atomic(directory / "episodes" / filename, result)
             episodes.append(result)

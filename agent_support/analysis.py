@@ -87,7 +87,9 @@ def compare(left: str | Path, right: str | Path) -> dict:
     }
 
 
-SUPPORT_ONLY_CONFIG_KEYS = {"condition", "memory_corpus", "memory_index", "memory_top_k"}
+SUPPORT_ONLY_CONFIG_KEYS = {"condition", "memory_corpus", "memory_index", "memory_top_k",
+                            "trajectory_corpus", "trajectory_index", "trajectory_top_k",
+                            "trajectory_token_budget"}
 
 
 def compare_support(baseline_dir: str | Path, supported_dir: str | Path) -> dict:
@@ -207,15 +209,124 @@ def compare_support(baseline_dir: str | Path, supported_dir: str | Path) -> dict
     }
 
 
+def compare_trajectory(left_dir: str | Path, right_dir: str | Path) -> dict:
+    """Pair baseline, ExpeL retrieval-only, or action-conditioned trajectory runs."""
+    left_meta, left_config, left_manifest, left_results = load_run(left_dir)
+    right_meta, right_config, right_manifest, right_results = load_run(right_dir)
+    conditions = {"baseline", "expel_retrieval_only_v1", "m2_trajectory_v1"}
+    left_condition, right_condition = left_config.get("condition"), right_config.get("condition")
+    if left_condition not in conditions or right_condition not in conditions or left_condition == right_condition:
+        raise ValueError("Expected two distinct baseline/trajectory conditions")
+    if (left_meta.get("condition") != left_condition or right_meta.get("condition") != right_condition):
+        raise ValueError("Run metadata condition differs from config")
+    if left_meta["benchmark"] != right_meta["benchmark"] or left_manifest != right_manifest:
+        raise ValueError("Benchmarks or task manifests differ")
+    for name, meta, manifest in (("left", left_meta, left_manifest), ("right", right_meta, right_manifest)):
+        if (meta.get("partition") != "development" or manifest.get("partition") != "development"
+                or meta.get("limit") is not None
+                or meta.get("selected_task_count") != meta.get("total_manifest_task_count")
+                or meta.get("selected_manifest_sha256") != meta.get("manifest_sha256")):
+            raise ValueError(f"{name} run must cover the full development manifest")
+    left_settings = {key: value for key, value in left_config.items() if key not in SUPPORT_ONLY_CONFIG_KEYS}
+    right_settings = {key: value for key, value in right_config.items() if key not in SUPPORT_ONLY_CONFIG_KEYS}
+    if left_settings != right_settings:
+        raise ValueError("Shared agent settings differ between conditions")
+    # The new retrieval implementation adds this dependency to run metadata. It is
+    # support-specific, so a frozen older baseline can lack it.
+    shared_packages = set(left_meta["package_versions"]) | set(right_meta["package_versions"])
+    support_only_packages = {"sentence-transformers"} if "baseline" in (left_condition, right_condition) else set()
+    for package in shared_packages - support_only_packages:
+        if left_meta["package_versions"].get(package) != right_meta["package_versions"].get(package):
+            raise ValueError(f"Package version differs: {package}")
+    for field in ("python_version", "alfworld_config_sha256", "textcraft_recipe_order_sha256"):
+        if left_meta.get(field) != right_meta.get(field):
+            raise ValueError(f"Run metadata differs: {field}")
+    trajectory_runs = [(meta, config) for meta, config in ((left_meta, left_config), (right_meta, right_config))
+                       if config["condition"] != "baseline"]
+    for meta, config in trajectory_runs:
+        if not all(meta.get(key) for key in ("trajectory_corpus_sha256", "trajectory_index_sha256",
+                                              "memory_selection_policy")):
+            raise ValueError("Trajectory run lacks memory provenance")
+        if not all(config.get(key) for key in ("trajectory_top_k", "trajectory_token_budget")):
+            raise ValueError("Trajectory run lacks retrieval settings")
+    if len(trajectory_runs) == 2:
+        for field in ("trajectory_corpus_sha256", "trajectory_index_sha256", "memory_selection_policy"):
+            if trajectory_runs[0][0][field] != trajectory_runs[1][0][field]:
+                raise ValueError(f"Trajectory memory differs: {field}")
+        for field in ("trajectory_top_k", "trajectory_token_budget"):
+            if trajectory_runs[0][1][field] != trajectory_runs[1][1][field]:
+                raise ValueError(f"Trajectory retrieval setting differs: {field}")
+
+    def metrics(results: dict[str, dict]) -> dict:
+        episodes = list(results.values())
+        count = len(episodes)
+        calls = sum(item.get("model_calls", item["model_decisions"]) for item in episodes)
+        tokens = sum(item["input_tokens"] + item["output_tokens"] for item in episodes)
+        support_events = [step["support"] for item in episodes for step in item["trace"] if "support" in step]
+        retrieval_events = [event for event in support_events if event.get("retrieval_event")]
+        return {"tasks": count, "successes": sum(bool(item["success"]) for item in episodes),
+                "success_rate": sum(bool(item["success"]) for item in episodes) / count,
+                "environment_actions": sum(item["environment_actions"] for item in episodes),
+                "model_decisions": sum(item["model_decisions"] for item in episodes),
+                "model_calls": calls, "total_tokens": tokens,
+                "inference_seconds": round(sum(item["inference_seconds"] for item in episodes), 3),
+                "failed_actions": sum(item["failed_actions"] for item in episodes),
+                "parser_errors": sum(item["parser_errors"] for item in episodes),
+                "retrieval_events": len(retrieval_events),
+                "retrieval_hits": sum(bool(event.get("retrieved")) for event in retrieval_events),
+                "support_model_calls": sum(item.get("support_model_calls", 0) for item in episodes),
+                "actions_changed_by_support": sum(item.get("actions_changed_by_support", 0) for item in episodes)}
+
+    left_totals, right_totals = metrics(left_results), metrics(right_results)
+    rows = []
+    for task in left_manifest["tasks"]:
+        task_id = task["task_id"]
+        left_episode, right_episode = left_results[task_id], right_results[task_id]
+        rows.append({"task_id": task_id, "left_success": bool(left_episode["success"]),
+                     "right_success": bool(right_episode["success"]),
+                     "outcome": ("helped" if right_episode["success"] and not left_episode["success"] else
+                                 "hurt" if left_episode["success"] and not right_episode["success"] else "same"),
+                     "left_status": left_episode["status"], "right_status": right_episode["status"],
+                     "delta_environment_actions": right_episode["environment_actions"] - left_episode["environment_actions"],
+                     "delta_model_calls": right_episode.get("model_calls", right_episode["model_decisions"])
+                                          - left_episode.get("model_calls", left_episode["model_decisions"]),
+                     "delta_total_tokens": right_episode["input_tokens"] + right_episode["output_tokens"]
+                                           - left_episode["input_tokens"] - left_episode["output_tokens"]})
+    return {"schema_version": 1, "benchmark": left_meta["benchmark"],
+            "manifest_sha256": left_meta["selected_manifest_sha256"],
+            "left": {"condition": left_condition, "run_id": left_meta["run_id"],
+                     "git_commit": left_meta.get("git_commit"), **left_totals},
+            "right": {"condition": right_condition, "run_id": right_meta["run_id"],
+                      "git_commit": right_meta.get("git_commit"), **right_totals},
+            "trajectory_memory": [{"condition": config["condition"],
+                                   "corpus_sha256": meta["trajectory_corpus_sha256"],
+                                   "index_sha256": meta["trajectory_index_sha256"],
+                                   "policy": meta["memory_selection_policy"],
+                                   "top_k": config["trajectory_top_k"],
+                                   "token_budget": config["trajectory_token_budget"]}
+                                  for meta, config in trajectory_runs],
+            "paired": {"helped": sum(row["outcome"] == "helped" for row in rows),
+                       "hurt": sum(row["outcome"] == "hurt" for row in rows),
+                       "same": sum(row["outcome"] == "same" for row in rows),
+                       "success_rate_delta": right_totals["success_rate"] - left_totals["success_rate"],
+                       "model_call_delta": right_totals["model_calls"] - left_totals["model_calls"],
+                       "total_token_delta": right_totals["total_tokens"] - left_totals["total_tokens"]},
+            "tasks": rows}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("left_run")
     parser.add_argument("right_run")
     parser.add_argument("--support-comparison", action="store_true", help="Compare a full baseline run with a full M2 development run")
+    parser.add_argument("--trajectory-comparison", action="store_true", help="Compare full baseline or trajectory-memory development runs")
     parser.add_argument("--output", help="Write the comparison JSON to this path")
     args = parser.parse_args()
-    result = (compare_support(args.left_run, args.right_run) if args.support_comparison
-              else compare(args.left_run, args.right_run))
+    if args.support_comparison and args.trajectory_comparison:
+        parser.error("Choose only one comparison mode")
+    result = (compare_trajectory(args.left_run, args.right_run) if args.trajectory_comparison else
+              compare_support(args.left_run, args.right_run) if args.support_comparison else
+              compare(args.left_run, args.right_run))
     if args.output:
         write_json_atomic(args.output, result)
     print(json.dumps(result, indent=2))

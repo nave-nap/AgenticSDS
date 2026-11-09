@@ -1,0 +1,15 @@
+{
+  "benchmark": "textcraft",
+  "condition": "m2_trajectory_v1",
+  "history_window": 8,
+  "max_actions": 30,
+  "max_decisions": 30,
+  "max_new_tokens": 100,
+  "trajectory_corpus": "/content/drive/MyDrive/agent_support/trajectory_memory/textcraft/corpus.json",
+  "trajectory_index": "/content/drive/MyDrive/agent_support/trajectory_memory/textcraft/index.json",
+  "trajectory_top_k": 2,
+  "trajectory_token_budget": 1800,
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "quantization": "nf4_4bit",
+  "seed": 42
+}

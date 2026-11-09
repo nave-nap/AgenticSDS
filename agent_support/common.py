@@ -66,8 +66,11 @@ def validate_manifest(manifest: dict) -> None:
                 raise ValueError("ALFWorld tasks require split, game_relpath, and game_sha256")
 
 
+TRAJECTORY_CONDITIONS = {"expel_retrieval_only_v1", "m2_trajectory_v1"}
+
+
 def validate_config(config: dict, benchmark: str) -> None:
-    if config.get("benchmark") != benchmark or config.get("condition") not in {"baseline", "m2_always"}:
+    if config.get("benchmark") != benchmark or config.get("condition") not in {"baseline", "m2_always", *TRAJECTORY_CONDITIONS}:
         raise ValueError("Config benchmark or condition is invalid")
     if config.get("quantization") != "nf4_4bit":
         raise ValueError("Baseline requires NF4 4-bit quantization")
@@ -81,3 +84,10 @@ def validate_config(config: dict, benchmark: str) -> None:
             raise ValueError("M2 requires memory_corpus and memory_index paths")
         if not isinstance(config.get("memory_top_k"), int) or config["memory_top_k"] <= 0:
             raise ValueError("M2 requires a positive memory_top_k")
+    if config["condition"] in TRAJECTORY_CONDITIONS:
+        if not all(isinstance(config.get(key), str) and config[key]
+                   for key in ("trajectory_corpus", "trajectory_index")):
+            raise ValueError("Trajectory support requires corpus and index paths")
+        for key in ("trajectory_top_k", "trajectory_token_budget"):
+            if not isinstance(config.get(key), int) or config[key] <= 0:
+                raise ValueError(f"Trajectory support requires a positive {key}")

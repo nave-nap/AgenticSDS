@@ -1,7 +1,8 @@
 pyyaml>=6,<7
-transformers>=4.45,<5
-accelerate>=1,<2
-bitsandbytes>=0.45,<1
+transformers==4.57.6
+sentence-transformers>=3.4,<6
+accelerate==1.15.0
+bitsandbytes==0.50.2
 textcraft==0.0.3
-alfworld
+alfworld==0.4.2
 textworld==1.7.0
