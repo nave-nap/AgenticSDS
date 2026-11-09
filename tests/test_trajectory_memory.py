@@ -163,6 +163,18 @@ def test_trajectory_comparison_requires_shared_artifacts(tmp_path):
     assert compare_trajectory(a, b)["paired"]["helped"] == 1
     assert compare_trajectory(b, c)["paired"]["same"] == 1
     run_meta = json.loads((c / "run.json").read_text())
+    run_meta["support_policy_id"] = "different_policy"
+    other_meta = json.loads((b / "run.json").read_text())
+    other_meta["support_policy_id"] = "fixed_by_condition_v1"
+    write_json_atomic(b / "run.json", other_meta)
+    write_json_atomic(c / "run.json", run_meta)
+    with pytest.raises(ValueError, match="support policies differ"):
+        compare_trajectory(b, c)
+    run_meta.pop("support_policy_id")
+    write_json_atomic(c / "run.json", run_meta)
+    with pytest.raises(ValueError, match="support policies differ"):
+        compare_trajectory(b, c)
+    run_meta["support_policy_id"] = "fixed_by_condition_v1"
     run_meta["package_versions"]["sentence-transformers"] = "different"
     write_json_atomic(c / "run.json", run_meta)
     with pytest.raises(ValueError, match="Package version differs"):
@@ -214,6 +226,7 @@ def test_runner_rejects_content_overlap_and_records_trajectory_hashes(monkeypatc
     assert metadata["status"] == "complete"
     assert metadata["trajectory_corpus_sha256"] == canonical_digest(corpus)
     assert metadata["trajectory_index_sha256"] == canonical_digest(index)
+    assert metadata["support_policy_id"] == "fixed_by_condition_v1"
     assert json.loads((output / "summary.json").read_text())["support_model_calls"] == 0
     corpus["records"][0]["task_fingerprint"] = dev_task["observation_sha256"]
     write_json_atomic(corpus_path, corpus)

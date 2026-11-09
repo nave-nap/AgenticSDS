@@ -2,6 +2,7 @@
   "alfworld_config": "/content/alfworld_config.yaml",
   "benchmark": "alfworld",
   "condition": "expel_retrieval_only_v1",
+  "support_policy": "fixed_by_condition_v1",
   "history_window": 8,
   "max_actions": 30,
   "max_decisions": 30,

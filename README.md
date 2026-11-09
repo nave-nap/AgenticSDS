@@ -67,4 +67,6 @@ For M2, follow [the training and retrieval protocol](docs/m2_protocol.md) and [t
 
 The next memory experiment uses [successful-trajectory retrieval and action-conditioned M2](docs/trajectory_memory_protocol.md). Its [separate Colab launcher](notebooks/trajectory_memory_launcher.ipynb) reuses the completed training runs, builds one MPNet-indexed corpus per benchmark, then evaluates a retrieval-only ExpeL adaptation and a proposed-action variant against the frozen baseline. These conditions are `expel_retrieval_only_v1` and `m2_trajectory_v1`; they do not overwrite `m2_always` or its results. Local contract tests can run without a GPU; the new smoke and pilot runs still require GPU compute.
 
+The runner now uses a [replaceable per-turn support policy](docs/support_policy.md) to decide when existing mechanisms are invoked. The default policy preserves the current conditions; each run and decision records its policy and selections for later analysis.
+
 For a Slurm cluster, use [the cluster setup and run guide](docs/locust_cluster.md). It stages the existing training and baseline archives from Downloads into a checked transfer directory, resolves the Colab-specific config paths on the cluster, builds memory in CPU jobs, and submits the smoke and pilot runs as GPU jobs.

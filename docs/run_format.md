@@ -1,4 +1,4 @@
-# Baseline run format
+# Run format
 
 Each invocation creates `results/<benchmark>_<UTC timestamp>_<random suffix>/` with:
 
@@ -16,10 +16,20 @@ episodes/0000_*.json    One full trajectory per task
 
 Every episode records the benchmark and task ID; success and final status; environment-action and model-decision counts; parser and failed-action counts; input and output token totals; inference and elapsed time; initial observation; and a `trace` array. Each trace entry stores the decision number, model output, parsed action, input observation, output observation, token counts, and benchmark outcome. ALFWorld entries also store the action list visible at that decision. Parse errors have no environment-action number.
 
-The runner accepts `condition: baseline` and `condition: m2_always`. M2 keeps
-the same benchmark adapters, base prompts, parsers, and action budget. Its
-episode and summary files additionally record support calls, extra model calls
-and tokens, retrieval time, support parse errors, and actions changed after
-support. Each supported trace records the original proposed action and the
-retrieved memory IDs, similarity scores, displayed content, and second model
-response. `run.json` records the content hashes of the memory corpus and index.
+The runner accepts `baseline`, the frozen legacy `m2_always`,
+`expel_retrieval_only_v1`, and `m2_trajectory_v1`. Supported runs keep the same
+benchmark adapters, base prompts, parsers, and action budget. Their episode
+and summary files additionally record support calls, extra model calls and
+tokens, retrieval time, support parse errors, and decisions whose action
+changed after support. `run.json` records the content hashes of the loaded
+memory corpus and index and the `support_policy_id` used to select support.
+
+Each supported decision has a `support_policy` object with the policy ID and
+the selected support IDs before and after the first model proposal. Each
+executed support call is recorded in the ordered `support_events` list with
+its retrieved memory IDs, similarity scores, displayed content, retrieval
+time, and any revision output. The `support` field remains a compatibility
+view of the latest event. The first proposal remains in `proposed_action`
+and `proposal_raw_model_output` when post-proposal support runs. This makes
+multiple support calls on one turn auditable without changing the baseline
+trace format.

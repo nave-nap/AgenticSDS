@@ -89,7 +89,7 @@ def compare(left: str | Path, right: str | Path) -> dict:
 
 SUPPORT_ONLY_CONFIG_KEYS = {"condition", "memory_corpus", "memory_index", "memory_top_k",
                             "trajectory_corpus", "trajectory_index", "trajectory_top_k",
-                            "trajectory_token_budget", "alfworld_config"}
+                            "trajectory_token_budget", "alfworld_config", "support_policy"}
 
 
 def compare_support(baseline_dir: str | Path, supported_dir: str | Path) -> dict:
@@ -250,19 +250,27 @@ def compare_trajectory(left_dir: str | Path, right_dir: str | Path) -> dict:
         if not all(config.get(key) for key in ("trajectory_top_k", "trajectory_token_budget")):
             raise ValueError("Trajectory run lacks retrieval settings")
     if len(trajectory_runs) == 2:
+        if trajectory_runs[0][0].get("support_policy_id") != trajectory_runs[1][0].get("support_policy_id"):
+            raise ValueError("Trajectory support policies differ")
         for field in ("trajectory_corpus_sha256", "trajectory_index_sha256", "memory_selection_policy"):
             if trajectory_runs[0][0][field] != trajectory_runs[1][0][field]:
                 raise ValueError(f"Trajectory memory differs: {field}")
+        for field in ("memory_corpus_sha256", "memory_index_sha256"):
+            if trajectory_runs[0][0].get(field) != trajectory_runs[1][0].get(field):
+                raise ValueError(f"Additional memory differs: {field}")
         for field in ("trajectory_top_k", "trajectory_token_budget"):
             if trajectory_runs[0][1][field] != trajectory_runs[1][1][field]:
                 raise ValueError(f"Trajectory retrieval setting differs: {field}")
+        if trajectory_runs[0][1].get("memory_top_k") != trajectory_runs[1][1].get("memory_top_k"):
+            raise ValueError("Additional memory retrieval settings differ")
 
     def metrics(results: dict[str, dict]) -> dict:
         episodes = list(results.values())
         count = len(episodes)
         calls = sum(item.get("model_calls", item["model_decisions"]) for item in episodes)
         tokens = sum(item["input_tokens"] + item["output_tokens"] for item in episodes)
-        support_events = [step["support"] for item in episodes for step in item["trace"] if "support" in step]
+        support_events = [event for item in episodes for step in item["trace"]
+                          for event in step.get("support_events", [step["support"]] if "support" in step else [])]
         retrieval_events = [event for event in support_events if event.get("retrieval_event")]
         return {"tasks": count, "successes": sum(bool(item["success"]) for item in episodes),
                 "success_rate": sum(bool(item["success"]) for item in episodes) / count,
@@ -295,9 +303,11 @@ def compare_trajectory(left_dir: str | Path, right_dir: str | Path) -> dict:
     return {"schema_version": 1, "benchmark": left_meta["benchmark"],
             "manifest_sha256": left_meta["selected_manifest_sha256"],
             "left": {"condition": left_condition, "run_id": left_meta["run_id"],
-                     "git_commit": left_meta.get("git_commit"), **left_totals},
+                     "git_commit": left_meta.get("git_commit"),
+                     "support_policy_id": left_meta.get("support_policy_id"), **left_totals},
             "right": {"condition": right_condition, "run_id": right_meta["run_id"],
-                      "git_commit": right_meta.get("git_commit"), **right_totals},
+                      "git_commit": right_meta.get("git_commit"),
+                      "support_policy_id": right_meta.get("support_policy_id"), **right_totals},
             "trajectory_memory": [{"condition": config["condition"],
                                    "corpus_sha256": meta["trajectory_corpus_sha256"],
                                    "index_sha256": meta["trajectory_index_sha256"],

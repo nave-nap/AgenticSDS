@@ -14,6 +14,8 @@ This experiment adapts the **retrieval-only** part of [ExpeL](https://arxiv.org/
 
 The old `m2_always` transition-memory condition and its results remain separate. B and C use the **same corpus and index files**, MPNet model, top-k=2, 1,800 Qwen-token example budget, base Qwen model, environment rules, and development tasks. Only the retrieval query and placement of the support call differ. C's second model call is part of its cost and is logged.
 
+The per-turn choice of support is held in the replaceable [`fixed_by_condition_v1` policy](support_policy.md). This first policy reproduces the current condition behavior; later policies can change when support is invoked while reusing the same retrieval and revision mechanisms. The run records policy identity and each turn's selected support calls.
+
 ## Corpus and leakage controls
 
 1. Use the already completed, full **baseline training** runs from Drive. No new training run is needed. The 40-task training runs yielded three successful ALFWorld episodes and 11 successful TextCraft episodes.

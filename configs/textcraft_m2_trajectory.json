@@ -1,6 +1,7 @@
 {
   "benchmark": "textcraft",
   "condition": "m2_trajectory_v1",
+  "support_policy": "fixed_by_condition_v1",
   "history_window": 8,
   "max_actions": 30,
   "max_decisions": 30,
