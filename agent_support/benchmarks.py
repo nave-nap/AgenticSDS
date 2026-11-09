@@ -21,10 +21,32 @@ class TextCraftEpisode:
         self.task_prompt = ""
 
     def reset(self) -> None:
-        observed, _ = self.env.reset(seed=self.task["seed"])
-        if observed != self.task["initial_observation"] or digest_text(observed) != self.task["observation_sha256"]:
-            raise RuntimeError(f"TextCraft task identity changed: {self.task['task_id']}")
-        self.initial_observation = self.observation = self.task_prompt = observed
+        # TextCraft 0.0.3 uses unordered collections while generating a task.
+        # Replay the manifest's exact visible task and goal instead of asking
+        # this runtime to generate a new task from the same seed.
+        initial = self.task["initial_observation"]
+        if digest_text(initial) != self.task["observation_sha256"]:
+            raise RuntimeError(f"TextCraft manifest observation changed: {self.task['task_id']}")
+        prefix = "Crafting commands:\n"
+        separator = "\n\nGoal: craft "
+        if not initial.startswith(prefix) or separator not in initial:
+            raise ValueError(f"Unrecognized TextCraft task format: {self.task['task_id']}")
+        commands_text, goal_text = initial[len(prefix):].rsplit(separator, 1)
+        if not goal_text.endswith("."):
+            raise ValueError(f"Unrecognized TextCraft goal format: {self.task['task_id']}")
+        commands = commands_text.splitlines()
+        goal = "minecraft:" + goal_text[:-1].replace(" ", "_")
+        tree = self.env.crafting_tree
+        catalog = {
+            recipe.recipe_str
+            for recipes in (*tree.itemid_recipes.values(), *tree.tag_recipes.values())
+            for recipe in recipes
+        }
+        if goal not in tree.itemid_recipes or not commands or any(command not in catalog for command in commands):
+            raise RuntimeError(f"TextCraft manifest is incompatible with installed recipes: {self.task['task_id']}")
+        self.env.inventory = {}
+        self.env.goal = goal
+        self.initial_observation = self.observation = self.task_prompt = initial
 
     def step(self, action: str) -> dict:
         observed, reward, terminated, truncated, info = self.env.step(action)

@@ -25,6 +25,10 @@ def load_run(directory: str | Path) -> tuple[dict, dict, dict, dict[str, dict]]:
         source = root / "alfworld_config.yaml"
         if hashlib.sha256(source.read_bytes()).hexdigest() != metadata["alfworld_config_sha256"]:
             raise ValueError(f"ALFWorld YAML snapshot changed: {root}")
+    if metadata.get("textcraft_recipe_order_sha256") is not None:
+        source = root / "textcraft_recipe_order.json"
+        if hashlib.sha256(source.read_bytes()).hexdigest() != metadata["textcraft_recipe_order_sha256"]:
+            raise ValueError(f"TextCraft recipe order snapshot changed: {root}")
     results = {}
     for path in sorted((root / "episodes").glob("*.json")):
         episode = read_json(path)
@@ -51,7 +55,7 @@ def compare(left: str | Path, right: str | Path) -> dict:
         raise ValueError("Baseline configurations differ")
     if left_meta["package_versions"] != right_meta["package_versions"]:
         raise ValueError("Package versions differ")
-    for field in ("git_commit", "python_version", "alfworld_config_sha256"):
+    for field in ("git_commit", "python_version", "alfworld_config_sha256", "textcraft_recipe_order_sha256"):
         if left_meta.get(field) != right_meta.get(field):
             raise ValueError(f"Run metadata differs: {field}")
     task_ids = [task["task_id"] for task in left_manifest["tasks"]]

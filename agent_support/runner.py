@@ -168,11 +168,17 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
     write_json_atomic(directory / "config.json", config)
     write_json_atomic(directory / "manifest.json", selected_manifest)
     alfworld_config_sha256 = None
+    textcraft_recipe_order_sha256 = None
     if manifest["benchmark"] == "alfworld":
         source = Path(config["alfworld_config"])
         config_bytes = source.read_bytes()
         alfworld_config_sha256 = hashlib.sha256(config_bytes).hexdigest()
         (directory / "alfworld_config.yaml").write_bytes(config_bytes)
+    else:
+        source = Path(__file__).with_name("textcraft_recipe_order.json")
+        order_bytes = source.read_bytes()
+        textcraft_recipe_order_sha256 = hashlib.sha256(order_bytes).hexdigest()
+        (directory / "textcraft_recipe_order.json").write_bytes(order_bytes)
     metadata = {
         "schema_version": 1,
         "run_id": run_id,
@@ -187,6 +193,7 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         "limit": limit,
         "config_sha256": canonical_digest(config),
         "alfworld_config_sha256": alfworld_config_sha256,
+        "textcraft_recipe_order_sha256": textcraft_recipe_order_sha256,
         "git_commit": git_commit(),
         "python_version": platform.python_version(),
         "package_versions": package_versions(),

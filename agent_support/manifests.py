@@ -8,7 +8,9 @@ import json
 import os
 import random
 import sys
+from functools import lru_cache
 from pathlib import Path
+from unittest.mock import patch
 
 from .common import digest_text, validate_manifest, write_json_atomic
 
@@ -20,6 +22,26 @@ SPLIT_KEYS = {
 }
 
 
+@lru_cache(maxsize=1)
+def _textcraft_recipe_order(recipe_dir: Path) -> tuple[str, ...]:
+    from importlib.metadata import version
+
+    frozen = json.loads(Path(__file__).with_name("textcraft_recipe_order.json").read_text(encoding="utf-8"))
+    if version("textcraft") != frozen["textcraft_version"]:
+        raise RuntimeError("TextCraft package version differs from the frozen recipe catalog")
+    names = tuple(frozen["order"])
+    if len(names) != len(set(names)) or set(names) != set(os.listdir(recipe_dir)):
+        raise RuntimeError("TextCraft recipe files differ from the frozen catalog")
+    digest = hashlib.sha256()
+    for name in sorted(names):
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update((recipe_dir / name).read_bytes())
+    if digest.hexdigest() != frozen["recipe_data_sha256"]:
+        raise RuntimeError("TextCraft recipe contents differ from the frozen catalog")
+    return names
+
+
 def textcraft_environment():
     if os.environ.get("PYTHONHASHSEED") != "0" or sys.flags.hash_randomization != 0:
         raise RuntimeError("TextCraft requires a fresh Python process started with PYTHONHASHSEED=0")
@@ -27,9 +49,21 @@ def textcraft_environment():
     from textcraft import TextCraft
 
     data_dir = Path(str(resources.files("textcraft").joinpath("data")))
-    if not (data_dir / "recipes").is_dir():
+    recipe_dir = (data_dir / "recipes").resolve()
+    if not recipe_dir.is_dir():
         raise RuntimeError(f"TextCraft recipes missing at {data_dir}")
-    return TextCraft(minecraft_dir=str(data_dir))
+    order = _textcraft_recipe_order(recipe_dir)
+    original_listdir = os.listdir
+
+    def ordered_listdir(path):
+        if isinstance(path, (str, os.PathLike)) and Path(path).resolve() == recipe_dir:
+            return list(order)
+        return original_listdir(path)
+
+    # TextCraft's constructor reads recipes in os.listdir order. Freeze that
+    # brief read to reproduce the catalog used by the committed task manifests.
+    with patch.object(os, "listdir", side_effect=ordered_listdir):
+        return TextCraft(minecraft_dir=str(data_dir))
 
 
 def textcraft_observation(seed: int) -> str:
