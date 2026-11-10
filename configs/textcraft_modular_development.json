@@ -2,6 +2,10 @@
   "schema_version": 2,
   "benchmark": "textcraft",
   "manifest": "manifests/textcraft/development.json",
+  "partition_manifests": {
+    "development": "manifests/textcraft/development.json",
+    "heldout": "manifests/textcraft/heldout.json"
+  },
   "condition": "modular_v1",
   "model_type": "qwen",
   "model_id": "Qwen/Qwen2.5-7B-Instruct",

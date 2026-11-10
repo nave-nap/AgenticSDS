@@ -70,6 +70,9 @@ class FixedConditionPolicy:
 
     policy_id = "fixed_by_condition_v1"
 
+    def __init__(self, spec: dict | None = None, task_id: str = ""):
+        pass
+
     def select(self, context: TurnContext) -> tuple[str, ...]:
         if context.phase == "before_proposal":
             return (TASK_TRAJECTORY,) if context.condition == "expel_retrieval_only_v1" else ()

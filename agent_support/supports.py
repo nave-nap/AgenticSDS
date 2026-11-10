@@ -44,6 +44,13 @@ def register_support(support_id: str, factory: Callable[[dict, object, dict], Su
     SUPPORT_REGISTRY[support_id] = factory
 
 
+def required_resource(resources: dict, name: str):
+    resource = resources.get(name)
+    if resource is None:
+        raise ValueError(f"Selected support requires unavailable {name} resource")
+    return resource
+
+
 def make_supports(config: dict, model, resources: dict) -> dict[str, SupportAdapter]:
     requested = config.get("supports")
     if requested is None:
@@ -207,6 +214,6 @@ class ActionTrajectorySupport:
 
 register_support("none", lambda config, model, resources: NoSupport())
 register_support(RECONSIDERATION, lambda config, model, resources: ReconsiderationSupport())
-register_support(LEGACY_ACTION_MEMORY, lambda config, model, resources: LegacyActionMemorySupport(resources["legacy"]))
-register_support(TASK_TRAJECTORY, lambda config, model, resources: TaskTrajectorySupport(resources["trajectory"]))
-register_support(ACTION_TRAJECTORY, lambda config, model, resources: ActionTrajectorySupport(resources["trajectory"]))
+register_support(LEGACY_ACTION_MEMORY, lambda config, model, resources: LegacyActionMemorySupport(required_resource(resources, "legacy")))
+register_support(TASK_TRAJECTORY, lambda config, model, resources: TaskTrajectorySupport(required_resource(resources, "trajectory")))
+register_support(ACTION_TRAJECTORY, lambda config, model, resources: ActionTrajectorySupport(required_resource(resources, "trajectory")))

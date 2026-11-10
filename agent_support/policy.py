@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+PROMPT_VERSIONS = {"alfworld": "numbered_actions_v1", "textcraft": "single_command_v1"}
+
 
 ALFWORLD_SYSTEM = (
     "You are an intelligent agent operating in ALFWorld. "

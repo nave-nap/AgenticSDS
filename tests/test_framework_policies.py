@@ -111,7 +111,8 @@ def test_v2_configuration_pins_components_and_policy_parameters(monkeypatch):
     value = config({"id": "random_v1", "support_id": "mock", "probability": 0.25, "seed": 7},
                    manifest="manifests/textcraft/development.json", output_root="results/development",
                    model_type="mock", model_id="mock", model_revision="mock-v1",
-                   support_versions={"mock": "mock-v1"})
+                   support_versions={"mock": "mock-v1"},
+                   partition_manifests={"development": "manifests/textcraft/development.json"})
     validate_config(value, "textcraft")
     value["selection_policy"]["probability"] = 1.2
     try:

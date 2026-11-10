@@ -43,10 +43,33 @@ def write_json_atomic(path: str | Path, value: Any) -> None:
             os.unlink(temporary)
 
 
+def write_json_new(path: str | Path, value: Any) -> None:
+    """Publish a complete JSON file exactly once, even across process races."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, indent=2, sort_keys=True, ensure_ascii=False)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, target)  # EEXIST protects completed episodes.
+        directory_fd = os.open(target.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def validate_manifest(manifest: dict) -> None:
-    if manifest.get("schema_version") != 1:
+    if manifest.get("schema_version") not in (1, 2):
         raise ValueError("Unsupported manifest schema")
-    if manifest.get("benchmark") not in {"alfworld", "textcraft"}:
+    from .benchmarks import BENCHMARK_REGISTRY, MANIFEST_VALIDATORS
+    if manifest.get("benchmark") not in BENCHMARK_REGISTRY:
         raise ValueError("Unknown benchmark")
     tasks = manifest.get("tasks")
     if not isinstance(tasks, list) or not tasks:
@@ -54,6 +77,11 @@ def validate_manifest(manifest: dict) -> None:
     ids = [task.get("task_id") for task in tasks]
     if any(not isinstance(value, str) or not value for value in ids) or len(ids) != len(set(ids)):
         raise ValueError("Task IDs must be distinct nonempty strings")
+    if manifest["benchmark"] not in {"alfworld", "textcraft"}:
+        if manifest["benchmark"] not in MANIFEST_VALIDATORS:
+            raise ValueError("Custom benchmark requires a manifest validator")
+        MANIFEST_VALIDATORS[manifest["benchmark"]](manifest)
+        return
     if manifest["benchmark"] == "textcraft":
         for task in tasks:
             if not isinstance(task.get("seed"), int) or not isinstance(task.get("initial_observation"), str):
@@ -141,6 +169,8 @@ def validate_experiment_config(config: dict, benchmark: str) -> None:
     for key in ("manifest", "output_root", "model_id", "model_revision"):
         if not isinstance(config.get(key), str) or not config[key]:
             raise ValueError(f"{key} is required")
+    if not isinstance(config.get("partition_manifests"), dict) or not config["partition_manifests"]:
+        raise ValueError("partition_manifests must identify the active and comparison partitions")
     if config.get("model_type") not in MODEL_REGISTRY:
         raise ValueError("Unknown model type")
     if config["model_type"] == "qwen":

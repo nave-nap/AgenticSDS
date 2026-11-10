@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import importlib.metadata
+import os
 import platform
+import signal
 import subprocess
 import time
 import uuid
@@ -13,14 +16,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .benchmarks import benchmark_driver, make_episode
-from .common import TRAJECTORY_CONDITIONS, canonical_digest, read_json, validate_config, validate_manifest, write_json_atomic
+from .common import TRAJECTORY_CONDITIONS, canonical_digest, read_json, validate_config, validate_manifest, write_json_atomic, write_json_new
 from .model import make_model
+from .policy import PROMPT_VERSIONS
 from .memory import ActionMemory, RETRIEVAL_POLICY
 from .controllers import run_controller
 from .support_policy import (ACTION_TRAJECTORY, LEGACY_ACTION_MEMORY, RECONSIDERATION, TASK_TRAJECTORY,
                              SupportPolicy, TurnContext, make_support_policy, selection_decision)
 from .supports import build_builtin_resources, load_builtin_artifacts, make_supports
 from .trajectory_memory import POLICY as TRAJECTORY_POLICY, TrajectoryMemory
+from .run_store import audit_partitions, checked_run_key, checkpoint, episode_filename, git_state, now_utc, verify_resume
+
+
+class PreemptionRequested(Exception):
+    pass
 
 
 def package_versions() -> dict:
@@ -183,6 +192,8 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                     if event is not None and outcome.fallback_reason:
                         event["fallback_reason"] = outcome.fallback_reason
                     continue
+                if event is None:
+                    raise ValueError("A support requesting model generation must provide an event")
                 if "max_support_tokens" in config:
                     counter = getattr(model, "count_messages_tokens", None)
                     if counter is None:
@@ -193,8 +204,13 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                         blocked_supports.append({"support_id": choice, "reason": "support_token_budget",
                                                  "required_reservation": reserve})
                         continue
+                    if event is not None:
+                        event["reserved_tokens_before_generation"] = reserve
                 revision = model.generate(revision_messages)
                 model_calls += 1
+                if "max_support_tokens" in config and (
+                        revision["input_tokens"] + revision["output_tokens"] > reserve):
+                    raise RuntimeError("Model token accounting exceeded the reserved support-token budget")
                 support_model_calls += 1
                 support_input_tokens += revision["input_tokens"]
                 support_output_tokens += revision["output_tokens"]
@@ -208,6 +224,8 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                               "input_tokens": revision["input_tokens"],
                               "output_tokens": revision["output_tokens"],
                               "inference_seconds": revision["inference_seconds"]})
+                if config.get("schema_version") == 2:
+                    event["actual_tokens_after_generation"] = revision["input_tokens"] + revision["output_tokens"]
                 revised = driver.parse(revision["text"], available)
                 if revised is not None:
                     action = revised
@@ -283,6 +301,16 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                        "actions_changed_by_support": sum(any(event.get("action_changed") for event in
                                                             item.get("support_events", [item["support"]] if "support" in item else []))
                                                          for item in trace)})
+    if config.get("schema_version") == 2:
+        result["budgets"] = {"limits": {key: config[key] for key in
+                                        ("max_actions", "max_decisions", "max_model_calls",
+                                         "max_support_calls", "max_support_tokens")},
+                             "used": {"environment_actions": actions_taken, "model_calls": model_calls,
+                                      "support_calls": support_calls,
+                                      "support_tokens": support_input_tokens + support_output_tokens}}
+        result["compute_cost"] = {"input_tokens": input_tokens, "output_tokens": output_tokens,
+                                  "inference_seconds": round(inference_seconds, 3),
+                                  "retrieval_seconds": round(retrieval_seconds, 3)}
     return result
 
 
@@ -308,14 +336,31 @@ def summarize(episodes: list[dict]) -> dict:
         for key in ("planner_calls", "executor_model_calls", "decompositions",
                     "plan_parse_errors", "false_completion_claims"):
             summary[key] = sum(item[key] for item in episodes)
+    if episodes and "budgets" in episodes[0]:
+        summary["budget_usage"] = {"model_calls": sum(item["model_calls"] for item in episodes),
+                                   "support_calls": sum(item["support_calls"] for item in episodes),
+                                   "support_tokens": sum(item["support_input_tokens"] + item["support_output_tokens"]
+                                                         for item in episodes)}
+        summary["policy_decisions"] = sum(2 for item in episodes for step in item["trace"]
+                                          if "support_policy" in step)
+        summary["blocked_support_selections"] = sum(len(step["support_policy"].get("blocked", []))
+                                                     for item in episodes for step in item["trace"]
+                                                     if "support_policy" in step)
     return summary
 
 
-def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None = None, model=None, episode_factory=make_episode) -> Path:
+def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None = None,
+        model=None, episode_factory=make_episode, *, run_key: str | None = None,
+        resume: bool = False, config_path: str | Path | None = None) -> Path:
     validate_manifest(manifest)
     validate_config(config, manifest["benchmark"])
     if config.get("schema_version") == 2 and read_json(config["manifest"]) != manifest:
         raise ValueError("Configured manifest differs from the supplied task manifest")
+    if config.get("schema_version") != 2 and (resume or run_key is not None):
+        raise ValueError("Verified resumption is available only for schema-v2 experiments")
+    if resume and run_key is None:
+        raise ValueError("Resumption requires the original run_key")
+    partition_hashes = audit_partitions(config, manifest) if config.get("schema_version") == 2 else None
     selected_policy = make_support_policy(config)
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive")
@@ -323,26 +368,40 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
     legacy_memory = "memory_corpus" in config
     trajectory_memory = "trajectory_corpus" in config
     artifacts = load_builtin_artifacts(config, manifest, selected)
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
+    run_id = (checked_run_key(run_key) if run_key is not None else
+              datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8])
     directory = Path(output_root) / f"{manifest['benchmark']}_{run_id}"
-    directory.mkdir(parents=True, exist_ok=False)
-    (directory / "episodes").mkdir()
+    resuming = resume and directory.exists()
+    if directory.exists() and not resuming:
+        raise FileExistsError(f"Run directory already exists: {directory}")
+    if not resuming:
+        directory.mkdir(parents=True, exist_ok=False)
+        (directory / "episodes").mkdir()
+    lease = (directory / ".run.lock").open("a+")
+    try:
+        fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        lease.close()
+        raise RuntimeError(f"Run is already active: {directory}") from exc
     selected_manifest = dict(manifest)
     selected_manifest["tasks"] = selected
-    write_json_atomic(directory / "config.json", config)
-    write_json_atomic(directory / "manifest.json", selected_manifest)
+    if not resuming:
+        write_json_new(directory / "config.json", config)
+        write_json_new(directory / "manifest.json", selected_manifest)
     alfworld_config_sha256 = None
     textcraft_recipe_order_sha256 = None
     if manifest["benchmark"] == "alfworld":
         source = Path(config["alfworld_config"])
         config_bytes = source.read_bytes()
         alfworld_config_sha256 = hashlib.sha256(config_bytes).hexdigest()
-        (directory / "alfworld_config.yaml").write_bytes(config_bytes)
-    else:
+        if not resuming:
+            (directory / "alfworld_config.yaml").write_bytes(config_bytes)
+    elif manifest["benchmark"] == "textcraft":
         source = Path(__file__).with_name("textcraft_recipe_order.json")
         order_bytes = source.read_bytes()
         textcraft_recipe_order_sha256 = hashlib.sha256(order_bytes).hexdigest()
-        (directory / "textcraft_recipe_order.json").write_bytes(order_bytes)
+        if not resuming:
+            (directory / "textcraft_recipe_order.json").write_bytes(order_bytes)
     metadata = {
         "schema_version": 1,
         "run_id": run_id,
@@ -382,35 +441,134 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         metadata["trajectory_memory_selection_policy"] = TRAJECTORY_POLICY
         if config["condition"] in TRAJECTORY_CONDITIONS:
             metadata["memory_selection_policy"] = TRAJECTORY_POLICY
+    expected_artifacts = {key: metadata[key] for key in (
+        "alfworld_config_sha256", "textcraft_recipe_order_sha256", "memory_corpus_sha256",
+        "memory_index_sha256", "trajectory_corpus_sha256", "trajectory_index_sha256") if key in metadata}
+    completed = {}
+    if config.get("schema_version") == 2:
+        metadata["schema_version"] = 2
+        metadata["model_id"] = config["model_id"]
+        metadata["model_type"] = config["model_type"]
+        metadata["prompt_versions"] = {manifest["benchmark"]: PROMPT_VERSIONS.get(manifest["benchmark"],
+                                                      config.get("prompt_version", "custom_v1"))}
+        metadata["support_versions"] = config["support_versions"]
+        metadata["policy_parameters"] = config["selection_policy"]
+        metadata["seed"] = config["seed"]
+        metadata["python_hash_seed"] = os.environ.get("PYTHONHASHSEED")
+        metadata["decoding"] = {"do_sample": False, "max_new_tokens": config["max_new_tokens"]}
+        metadata["budget_limits"] = {key: config[key] for key in
+                                     ("max_actions", "max_decisions", "max_model_calls",
+                                      "max_support_calls", "max_support_tokens")}
+        metadata["partition_manifest_sha256"] = partition_hashes
+        metadata["manifest_file_sha256"] = hashlib.sha256(Path(config["manifest"]).read_bytes()).hexdigest()
+        source = Path(config_path) if config_path is not None else directory / "config.json"
+        metadata["config_file_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+        metadata["config_source"] = str(source)
+        metadata["effective_output_root"] = str(Path(output_root).resolve())
+        metadata["run_key"] = run_key
+        metadata["platform"] = platform.platform()
+        metadata["checkpoint_history"] = []
+        metadata["checkpoint_history"].append({"event": "created", "at_utc": now_utc(),
+                                               "verified_episodes": 0})
+        provenance = {**git_state(), "python_version": metadata["python_version"],
+                      "package_versions": metadata["package_versions"], "platform": metadata["platform"],
+                      "limit": limit, "selected_task_count": len(selected),
+                      "total_manifest_task_count": len(manifest["tasks"]),
+                      "benchmark": manifest["benchmark"], "condition": config["condition"],
+                      "model_id": config["model_id"], "model_type": config["model_type"],
+                      "model_revision": config["model_revision"], "seed": config["seed"],
+                      "python_hash_seed": metadata["python_hash_seed"],
+                      "prompt_versions": metadata["prompt_versions"],
+                      "support_versions": config["support_versions"],
+                      "policy_parameters": config["selection_policy"],
+                      "budget_limits": metadata["budget_limits"],
+                      "config_file_sha256": metadata["config_file_sha256"],
+                      "effective_output_root": metadata["effective_output_root"],
+                      "run_key": run_key,
+                      "manifest_file_sha256": metadata["manifest_file_sha256"],
+                      "partition_manifest_sha256": partition_hashes}
+        metadata.update(provenance)
+        if resuming:
+            metadata, completed, recovered = verify_resume(
+                directory, config, selected_manifest, provenance, expected_artifacts)
+            metadata.setdefault("checkpoint_history", []).append({
+                "event": "resumed", "at_utc": now_utc(), "previous_status": metadata["status"],
+                "verified_episodes": len(completed), "uncheckpointed_episodes": recovered})
+            metadata["status"] = "running"
+            metadata.pop("error", None)
+            metadata.pop("finished_utc", None)
+            checkpoint(directory, selected, completed)
+        else:
+            checkpoint(directory, selected, completed)
     write_json_atomic(directory / "run.json", metadata)
-    episodes = []
+    episodes = [completed[index] for index in sorted(completed)]
+    if resuming:
+        write_json_atomic(directory / "summary.json", summarize(episodes))
+    previous_sigterm = None
+    if config.get("schema_version") == 2:
+        def request_preemption(number, frame):
+            raise PreemptionRequested("SIGTERM received; completed episodes are checkpointed")
+
+        try:
+            previous_sigterm = signal.getsignal(signal.SIGTERM)
+            signal.signal(signal.SIGTERM, request_preemption)
+        except ValueError:  # Signal handlers can only be installed in the main thread.
+            previous_sigterm = None
     try:
         actual_model = model if model is not None else make_model(config)
+        if config.get("schema_version") == 2:
+            model_metadata = actual_model.metadata()
+            if (model_metadata.get("model_id") != config["model_id"] or
+                    model_metadata.get("model_revision") != config["model_revision"]):
+                raise ValueError("Loaded model identity or revision differs from configuration")
+            if resuming and metadata.get("model_metadata") not in (None, model_metadata):
+                raise ValueError("Resumed model runtime differs from prior process")
+            metadata["model_metadata"] = model_metadata
         if hasattr(actual_model, "torch"):
             metadata["gpu_name"] = actual_model.torch.cuda.get_device_name()
             metadata["torch_cuda_version"] = actual_model.torch.version.cuda
         resources = build_builtin_resources(config, actual_model, artifacts)
         support, trajectory_support = resources["legacy"], resources["trajectory"]
+        if config.get("schema_version") == 2:
+            make_supports(config, actual_model, resources)  # Validate versions before inference.
         for index, task in enumerate(selected):
+            if index in completed:
+                continue
             result = run_episode(manifest["benchmark"], task, config, actual_model,
                                  episode_factory, support=support,
                                  trajectory_support=trajectory_support,
                                  support_policy=make_support_policy(config, task["task_id"]),
                                  support_adapters=make_supports(config, actual_model, resources))
-            filename = f"{index:04d}_{canonical_digest(task['task_id'])[:12]}.json"
-            write_json_atomic(directory / "episodes" / filename, result)
+            if config.get("schema_version") == 2:
+                result["task_sha256"] = canonical_digest(task)
+                result["config_sha256"] = canonical_digest(config)
+            filename = episode_filename(index, task)
+            write_json_new(directory / "episodes" / filename, result)
             episodes.append(result)
+            completed[index] = result
+            if config.get("schema_version") == 2:
+                checkpoint(directory, selected, completed)
             write_json_atomic(directory / "summary.json", summarize(episodes))
+            metadata["completed_task_count"] = len(completed)
+            write_json_atomic(directory / "run.json", metadata)
             print(f"{index + 1}/{len(selected)} {task['task_id']} {result['status']} actions={result['environment_actions']}", flush=True)
         metadata["status"] = "complete"
+    except PreemptionRequested:
+        metadata["status"] = "interrupted"
+        metadata.setdefault("checkpoint_history", []).append({"event": "preempted", "at_utc": now_utc(),
+                                                               "verified_episodes": len(completed)})
+        raise
     except Exception as exc:
         metadata["status"] = "failed"
         metadata["error"] = repr(exc)
         raise
     finally:
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
         metadata["completed_task_count"] = len(episodes)
         metadata["finished_utc"] = datetime.now(timezone.utc).isoformat()
         write_json_atomic(directory / "run.json", metadata)
+        lease.close()
     return directory
 
 
@@ -420,6 +578,8 @@ def main() -> None:
     parser.add_argument("--manifest")
     parser.add_argument("--output-root")
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--run-key", help="Stable job identifier for schema-v2 checkpoint recovery")
+    parser.add_argument("--resume", action="store_true", help="Verify and continue an existing run-key directory")
     args = parser.parse_args()
     config = read_json(args.config)
     manifest_path = args.manifest or config.get("manifest")
@@ -427,7 +587,8 @@ def main() -> None:
     if not manifest_path or not output_root:
         parser.error("--manifest and --output-root are required for legacy configs")
     manifest = read_json(manifest_path)
-    output = run(config, manifest, output_root, args.limit)
+    output = run(config, manifest, output_root, args.limit,
+                 run_key=args.run_key, resume=args.resume, config_path=args.config)
     print(f"Run complete: {output}")
 
 

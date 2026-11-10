@@ -162,14 +162,18 @@ class ALFWorldDriver:
 
 
 BENCHMARK_DRIVERS = {"textcraft": TextCraftDriver(), "alfworld": ALFWorldDriver()}
+MANIFEST_VALIDATORS: dict[str, Callable[[dict], None]] = {}
 
 
-def register_benchmark(benchmark_id: str, factory: Callable[[dict, dict], object], driver=None) -> None:
+def register_benchmark(benchmark_id: str, factory: Callable[[dict, dict], object], driver=None,
+                       manifest_validator: Callable[[dict], None] | None = None) -> None:
     if not benchmark_id or benchmark_id in BENCHMARK_REGISTRY:
         raise ValueError(f"Benchmark is empty or already registered: {benchmark_id}")
     BENCHMARK_REGISTRY[benchmark_id] = factory
     if driver is not None:
         BENCHMARK_DRIVERS[benchmark_id] = driver
+    if manifest_validator is not None:
+        MANIFEST_VALIDATORS[benchmark_id] = manifest_validator
 
 
 def benchmark_driver(benchmark_id: str):
