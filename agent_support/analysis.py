@@ -211,7 +211,7 @@ def compare_support(baseline_dir: str | Path, supported_dir: str | Path) -> dict
 
 
 def compare_trajectory(left_dir: str | Path, right_dir: str | Path) -> dict:
-    """Pair full development runs across the trajectory and no-retrieval controls."""
+    """Pair full development or held-out runs across support conditions."""
     left_meta, left_config, left_manifest, left_results = load_run(left_dir)
     right_meta, right_config, right_manifest, right_results = load_run(right_dir)
     trajectory_conditions = {"expel_retrieval_only_v1", "m2_trajectory_v1"}
@@ -223,12 +223,27 @@ def compare_trajectory(left_dir: str | Path, right_dir: str | Path) -> dict:
         raise ValueError("Run metadata condition differs from config")
     if left_meta["benchmark"] != right_meta["benchmark"] or left_manifest != right_manifest:
         raise ValueError("Benchmarks or task manifests differ")
+    partition = left_manifest.get("partition")
+    if partition not in {"development", "heldout"}:
+        raise ValueError("Support comparison requires development or held-out runs")
     for name, meta, manifest in (("left", left_meta, left_manifest), ("right", right_meta, right_manifest)):
-        if (meta.get("partition") != "development" or manifest.get("partition") != "development"
+        if (meta.get("partition") != partition or manifest.get("partition") != partition
                 or meta.get("limit") is not None
                 or meta.get("selected_task_count") != meta.get("total_manifest_task_count")
                 or meta.get("selected_manifest_sha256") != meta.get("manifest_sha256")):
-            raise ValueError(f"{name} run must cover the full development manifest")
+            raise ValueError(f"{name} run must cover the full {partition} manifest")
+    if partition == "heldout":
+        for name, meta, config in (("left", left_meta, left_config), ("right", right_meta, right_config)):
+            if (not config.get("evaluation_lock_sha256")
+                    or config.get("evaluation_lock_sha256") != meta.get("evaluation_lock_sha256")
+                    or not config.get("model_revision")
+                    or config.get("model_revision") != meta.get("model_revision")):
+                raise ValueError(f"{name} held-out run lacks matching evaluation lock or model revision")
+        if left_meta.get("git_commit") != right_meta.get("git_commit"):
+            raise ValueError("Held-out runs use different code commits")
+        for field in ("gpu_name", "torch_cuda_version"):
+            if left_meta.get(field) != right_meta.get(field):
+                raise ValueError(f"Held-out runs used different GPU runtimes: {field}")
     left_settings = {key: value for key, value in left_config.items() if key not in SUPPORT_ONLY_CONFIG_KEYS}
     right_settings = {key: value for key, value in right_config.items() if key not in SUPPORT_ONLY_CONFIG_KEYS}
     if left_settings != right_settings:
@@ -236,7 +251,9 @@ def compare_trajectory(left_dir: str | Path, right_dir: str | Path) -> dict:
     # The new retrieval implementation adds this dependency to run metadata. It is
     # support-specific, so a frozen older baseline can lack it.
     shared_packages = set(left_meta["package_versions"]) | set(right_meta["package_versions"])
-    support_only_packages = {"sentence-transformers"} if "baseline" in (left_condition, right_condition) else set()
+    support_only_packages = ({"sentence-transformers"}
+                             if partition == "development" and "baseline" in (left_condition, right_condition)
+                             else set())
     for package in shared_packages - support_only_packages:
         if left_meta["package_versions"].get(package) != right_meta["package_versions"].get(package):
             raise ValueError(f"Package version differs: {package}")
@@ -329,6 +346,7 @@ def compare_trajectory(left_dir: str | Path, right_dir: str | Path) -> dict:
                      "delta_total_tokens": right_episode["input_tokens"] + right_episode["output_tokens"]
                                            - left_episode["input_tokens"] - left_episode["output_tokens"]})
     return {"schema_version": 1, "benchmark": left_meta["benchmark"],
+            "partition": partition,
             "manifest_sha256": left_meta["selected_manifest_sha256"],
             "different_git_commits": left_meta.get("git_commit") != right_meta.get("git_commit"),
             "left": {"condition": left_condition, "run_id": left_meta["run_id"],
@@ -358,7 +376,7 @@ def main() -> None:
     parser.add_argument("left_run")
     parser.add_argument("right_run")
     parser.add_argument("--support-comparison", action="store_true", help="Compare a full baseline run with a full M2 development run")
-    parser.add_argument("--trajectory-comparison", action="store_true", help="Compare full baseline, trajectory-memory, or reconsideration development runs")
+    parser.add_argument("--trajectory-comparison", action="store_true", help="Compare full development or held-out runs across support conditions")
     parser.add_argument("--output", help="Write the comparison JSON to this path")
     args = parser.parse_args()
     if args.support_comparison and args.trajectory_comparison:

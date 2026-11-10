@@ -19,7 +19,8 @@ class QwenModel:
         torch.cuda.manual_seed_all(seed)
         self.torch = torch
         self.max_new_tokens = config["max_new_tokens"]
-        self.tokenizer = AutoTokenizer.from_pretrained(config["model_id"])
+        revision = {"revision": config["model_revision"]} if config.get("model_revision") else {}
+        self.tokenizer = AutoTokenizer.from_pretrained(config["model_id"], **revision)
         quantization = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
@@ -27,7 +28,7 @@ class QwenModel:
             bnb_4bit_use_double_quant=True,
         )
         self.model = AutoModelForCausalLM.from_pretrained(
-            config["model_id"], device_map="auto", quantization_config=quantization
+            config["model_id"], device_map="auto", quantization_config=quantization, **revision
         )
         self.model.eval()
 

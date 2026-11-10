@@ -1,5 +1,7 @@
 # Run the trajectory-memory experiment on a Slurm cluster
 
+For the frozen 100-task TextCraft follow-up comparing baseline, M2, and reconsideration, use the [held-out evaluation protocol](textcraft_heldout_evaluation.md). It uses the existing Python 3.12/PyTorch environment, a CPU freeze job, development smoke tests, and three sequential GPU batch jobs.
+
 The cluster workflow uses the same Python runner as Colab. Evan's account is on Penn's Locust cluster at `locust-login.seas.upenn.edu`. SSH uses the PennKey username `evanpan`, password, and two-factor authentication. Off campus, connect to the [Penn VPN](https://hpc.engineering.upenn.edu/using-penn-vpn-to-access-resources/) first. The Slurm partition, account, Python module, and GPU model must be checked from the account's allocation. Slurm's [official `sbatch` documentation](https://slurm.schedmd.com/sbatch.html) describes the resource flags used here.
 
 **Current Locust environment:** Python 3.12 and a working CUDA-compatible PyTorch build are already installed. Keep that environment for the new reconsideration experiment. Do not rerun `scripts/locust_install.sh` or replace PyTorch with a CUDA 13.x build. The older install instructions below are for a fresh setup only. `scripts/locust_job.sh` resolves the repository from `SLURM_SUBMIT_DIR` when Slurm copies the script to its spool directory; submit jobs from the repository root.

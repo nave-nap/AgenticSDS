@@ -366,6 +366,8 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         "total_manifest_task_count": len(manifest["tasks"]),
         "limit": limit,
         "config_sha256": canonical_digest(config),
+        "evaluation_lock_sha256": config.get("evaluation_lock_sha256"),
+        "model_revision": config.get("model_revision"),
         "alfworld_config_sha256": alfworld_config_sha256,
         "textcraft_recipe_order_sha256": textcraft_recipe_order_sha256,
         "git_commit": git_commit(),
@@ -391,6 +393,9 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
     episodes = []
     try:
         actual_model = model if model is not None else QwenModel(config)
+        if hasattr(actual_model, "torch"):
+            metadata["gpu_name"] = actual_model.torch.cuda.get_device_name()
+            metadata["torch_cuda_version"] = actual_model.torch.version.cuda
         support = (ActionMemory(legacy_corpus, legacy_index,
                                 SentenceEmbedder(legacy_index["embedding_model"],
                                                  revision=legacy_index.get("embedding_revision")),

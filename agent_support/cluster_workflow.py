@@ -218,25 +218,46 @@ def compare_pilots(root: Path, benchmark: str, baseline_dir: str | Path | None =
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=("preflight", "build-memory", "smoke", "pilot", "compare"))
+    parser.add_argument("stage", choices=("preflight", "build-memory", "smoke", "pilot", "compare",
+                                          "freeze-heldout", "evaluate-heldout", "compare-heldout"))
     parser.add_argument("--data-root", default=os.environ.get("AGENT_SUPPORT_DATA"))
     parser.add_argument("--benchmark", choices=("alfworld", "textcraft"), required=True)
     parser.add_argument("--condition", choices=tuple(CONDITION_CONFIGS))
     parser.add_argument("--baseline-run", help="Full cluster baseline directory when frozen baseline versions differ")
-    parser.add_argument("--left-run", help="Explicit full development run for a pair comparison")
-    parser.add_argument("--right-run", help="Explicit full development run for a pair comparison")
+    parser.add_argument("--left-run", help="Explicit full run for a pair comparison")
+    parser.add_argument("--right-run", help="Explicit full run for a pair comparison")
+    parser.add_argument("--m2-run", help="Full held-out M2 run for three-condition comparison")
+    parser.add_argument("--reconsideration-run", help="Full held-out reconsideration run")
     args = parser.parse_args()
     if not args.data_root:
         parser.error("Set AGENT_SUPPORT_DATA or pass --data-root")
     root = Path(args.data_root).expanduser().resolve()
     if args.stage in {"smoke", "pilot"} and not args.condition:
         parser.error("--condition is required for smoke and pilot")
+    if args.stage in {"freeze-heldout", "evaluate-heldout", "compare-heldout"} and args.benchmark != "textcraft":
+        parser.error("The held-out workflow currently supports TextCraft only")
+    if args.stage == "evaluate-heldout" and args.condition not in {"baseline", "m2_trajectory_v1", "reconsideration_only_v1"}:
+        parser.error("--condition must be baseline, m2_trajectory_v1, or reconsideration_only_v1")
     if args.stage == "preflight":
         result = preflight(root, args.benchmark)
     elif args.stage == "build-memory":
         result = build_memory(root, args.benchmark)
     elif args.stage in {"smoke", "pilot"}:
         result = run_condition(root, args.benchmark, args.condition, args.stage == "smoke")
+    elif args.stage == "freeze-heldout":
+        from .heldout_evaluation import freeze
+        result = freeze(root)
+    elif args.stage == "evaluate-heldout":
+        from .heldout_evaluation import run_condition as run_heldout
+        result = run_heldout(root, args.condition)
+    elif args.stage == "compare-heldout":
+        from .heldout_evaluation import compare_three
+        explicit = (args.baseline_run, args.m2_run, args.reconsideration_run)
+        if any(explicit) and not all(explicit):
+            parser.error("Supply all three run paths or let the workflow find the unique full runs")
+        selected = ({"baseline": args.baseline_run, "m2_trajectory_v1": args.m2_run,
+                     "reconsideration_only_v1": args.reconsideration_run} if all(explicit) else None)
+        result = compare_three(root, selected)
     else:
         result = compare_pilots(root, args.benchmark, args.baseline_run, args.left_run, args.right_run)
     print(json.dumps(result, indent=2), flush=True)

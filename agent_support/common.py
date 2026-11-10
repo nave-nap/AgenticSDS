@@ -79,6 +79,10 @@ def validate_config(config: dict, benchmark: str) -> None:
             raise ValueError(f"{key} must be a positive integer")
     if not isinstance(config.get("model_id"), str) or not config["model_id"]:
         raise ValueError("model_id is required")
+    if "model_revision" in config and (not isinstance(config["model_revision"], str)
+                                       or len(config["model_revision"]) != 40
+                                       or any(char not in "0123456789abcdef" for char in config["model_revision"])):
+        raise ValueError("model_revision must be a full 40-character lowercase commit hash")
     if "support_policy" in config and (not isinstance(config["support_policy"], str)
                                        or not config["support_policy"]):
         raise ValueError("support_policy must be a nonempty policy ID")

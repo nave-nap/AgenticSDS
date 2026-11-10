@@ -70,3 +70,5 @@ The next memory experiment uses [successful-trajectory retrieval and action-cond
 The runner now uses a [replaceable per-turn support policy](docs/support_policy.md) to decide when existing mechanisms are invoked. The default policy preserves the current conditions; each run and decision records its policy and selections for later analysis.
 
 For a Slurm cluster, use [the cluster setup and run guide](docs/locust_cluster.md). It stages the existing training and baseline archives from Downloads into a checked transfer directory, resolves the Colab-specific config paths on the cluster, builds memory in CPU jobs, and submits the smoke and pilot runs as GPU jobs.
+
+The next TextCraft evaluation uses the existing 100-task held-out manifest and a locked three-condition workflow. See [the held-out evaluation protocol](docs/textcraft_heldout_evaluation.md) for the CPU audit/freeze, development smoke tests, sequential Locust jobs, and paired analysis.
