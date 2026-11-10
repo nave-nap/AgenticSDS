@@ -4,6 +4,32 @@ from __future__ import annotations
 
 import random
 import time
+from typing import Callable, Protocol
+
+
+class ModelAdapter(Protocol):
+    """Generation accounting is returned with every model response."""
+
+    def generate(self, messages: list[dict], max_new_tokens: int | None = None) -> dict: ...
+    def metadata(self) -> dict: ...
+    def count_tokens(self, text: str) -> int: ...
+
+
+MODEL_REGISTRY: dict[str, Callable[[dict], ModelAdapter]] = {}
+
+
+def register_model(model_type: str, factory: Callable[[dict], ModelAdapter]) -> None:
+    if not model_type or model_type in MODEL_REGISTRY:
+        raise ValueError(f"Model type is empty or already registered: {model_type}")
+    MODEL_REGISTRY[model_type] = factory
+
+
+def make_model(config: dict) -> ModelAdapter:
+    model_type = config.get("model_type", "qwen")
+    try:
+        return MODEL_REGISTRY[model_type](config)
+    except KeyError as exc:
+        raise ValueError(f"Unknown model type: {model_type}") from exc
 
 
 class QwenModel:
@@ -31,6 +57,19 @@ class QwenModel:
             config["model_id"], device_map="auto", quantization_config=quantization, **revision
         )
         self.model.eval()
+        self.model_id = config["model_id"]
+        self.model_revision = config.get("model_revision") or getattr(self.model.config, "_commit_hash", None)
+
+    def metadata(self) -> dict:
+        return {"model_type": "qwen", "model_id": self.model_id,
+                "model_revision": self.model_revision,
+                "quantization": "nf4_4bit", "chat_template": "tokenizer",
+                "decoding": {"do_sample": False, "max_new_tokens": self.max_new_tokens},
+                "gpu_name": self.torch.cuda.get_device_name(),
+                "torch_cuda_version": self.torch.version.cuda}
+
+    def count_tokens(self, text: str) -> int:
+        return len(self.tokenizer.encode(text, add_special_tokens=False))
 
     def generate(self, messages: list[dict], max_new_tokens: int | None = None) -> dict:
         input_ids = self.tokenizer.apply_chat_template(
@@ -53,3 +92,6 @@ class QwenModel:
             "output_tokens": int(output_ids.shape[0]),
             "inference_seconds": round(time.perf_counter() - started, 3),
         }
+
+
+register_model("qwen", QwenModel)

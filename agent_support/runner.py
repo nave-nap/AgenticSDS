@@ -14,13 +14,14 @@ from pathlib import Path
 
 from .benchmarks import make_episode
 from .common import TRAJECTORY_CONDITIONS, canonical_digest, read_json, validate_config, validate_manifest, write_json_atomic
-from .model import QwenModel
+from .model import make_model
 from .policy import alfworld_messages, parse_alfworld, parse_textcraft, textcraft_messages
 from .memory import ActionMemory, RETRIEVAL_POLICY, SentenceEmbedder, support_messages
-from .reconsideration import reconsideration_messages
+from .controllers import run_controller
 from .support_policy import (ACTION_TRAJECTORY, LEGACY_ACTION_MEMORY, RECONSIDERATION, TASK_TRAJECTORY,
                              SupportPolicy, TurnContext, make_support_policy, selected_supports)
-from .trajectory_memory import MPNetEmbedder, POLICY as TRAJECTORY_POLICY, TrajectoryMemory, memory_messages
+from .supports import make_supports
+from .trajectory_memory import MPNetEmbedder, POLICY as TRAJECTORY_POLICY, TrajectoryMemory
 
 
 def package_versions() -> dict:
@@ -42,10 +43,12 @@ def git_commit() -> str | None:
 def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory=make_episode,
                 support: ActionMemory | None = None,
                 trajectory_support: TrajectoryMemory | None = None,
-                support_policy: SupportPolicy | None = None) -> dict:
-    if config.get("condition") == "adapt_dynamic_replanning_v1":
-        from .adapt import run_adapt_episode
-        return run_adapt_episode(task, config, model, episode_factory)
+                support_policy: SupportPolicy | None = None,
+                support_adapters: dict | None = None) -> dict:
+    controller_id = config.get("controller", "adapt_dynamic_replanning_v1" if
+                               config.get("condition") == "adapt_dynamic_replanning_v1" else None)
+    if controller_id:
+        return run_controller(controller_id, task, config, model, episode_factory)
     episode = episode_factory(benchmark, task, config)
     started = time.perf_counter()
     history: list[dict] = []
@@ -61,6 +64,7 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
     success = False
     condition = config.get("condition", "m2_always" if support is not None else "baseline")
     policy = support_policy or make_support_policy(config)
+    adapters = support_adapters or make_supports(config, model, {"legacy": support, "trajectory": trajectory_support})
 
     def context(phase: str, decision: int, available: list[str] | None,
                 proposed_action: str | None = None, proposal_output: str | None = None) -> TurnContext:
@@ -76,8 +80,6 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
 
     try:
         episode.reset()
-        task_hits = []
-        task_retrieved = False
         for decision in range(1, config["max_decisions"] + 1):
             if actions_taken >= config["max_actions"]:
                 status = "max_actions"
@@ -92,18 +94,16 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                 available = None
                 messages = textcraft_messages(episode.initial_observation, history, config["history_window"])
             before = selected_supports(policy, context("before_proposal", decision, available))
-            task_retrieval_event = False
-            task_retrieval_time = 0.0
+            before_events = []
             for choice in before:
-                if choice == TASK_TRAJECTORY:
-                    if trajectory_support is None:
-                        raise ValueError("Policy selected task trajectories without a trajectory memory")
-                    if not task_retrieved:
-                        task_hits, task_retrieval_time = trajectory_support.retrieve(benchmark, episode.task_prompt)
-                        task_retrieved = task_retrieval_event = True
-                        support_calls += 1
-                        retrieval_seconds += task_retrieval_time
-                    messages = memory_messages(messages, task_hits)
+                if choice not in adapters or adapters[choice].phase != "before_proposal":
+                    raise ValueError(f"Policy selected unavailable or misphased support: {choice}")
+                outcome = adapters[choice].invoke(context("before_proposal", decision, available), messages, None)
+                messages = outcome.messages
+                support_calls += outcome.calls
+                retrieval_seconds += outcome.retrieval_seconds
+                if outcome.event is not None:
+                    before_events.append(outcome.event)
             generation = model.generate(messages)
             input_tokens += generation["input_tokens"]
             output_tokens += generation["output_tokens"]
@@ -130,63 +130,26 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                 record.setdefault("support_events", []).append(event)
                 record["support"] = event  # Backward-compatible single-event view.
 
-            if TASK_TRAJECTORY in before:
-                event = {"mechanism": "expel_retrieval_only_adaptation",
-                         "selection_policy": TRAJECTORY_POLICY,
-                         "retrieval_seconds": task_retrieval_time,
-                         "retrieval_event": task_retrieval_event,
-                         "retrieved": task_hits, "action_changed": False}
-                if not task_hits:
-                    event["fallback_reason"] = "no_trajectory_within_budget"
+            for event in before_events:
                 add_support_event(event)
             for choice in after:
                 if action is None:
                     break
                 proposed_action = action
-                if choice == LEGACY_ACTION_MEMORY:
-                    if support is None:
-                        raise ValueError("Policy selected legacy action memory without an index")
-                    hits, retrieval_time = support.retrieve(
-                        benchmark, episode.task_prompt, episode.observation, proposed_action)
-                    event = {
-                        "mechanism": "m2_action_memory", "selection_policy": RETRIEVAL_POLICY,
-                        "retrieval_seconds": retrieval_time, "retrieval_event": True,
-                        "proposed_action": proposed_action, "action_changed": False,
-                        "retrieved": [{"memory_id": hit["memory_id"], "similarity": hit["similarity"],
-                                       "content": {key: hit[key] for key in ("task_prompt", "observation", "action",
-                                                                                "feedback", "failed_action", "episode_success")}}
-                                      for hit in hits],
-                    }
-                    revision_messages = support_messages(messages, proposed_action, hits, benchmark) if hits else None
-                    fallback_reason = "no_relevant_memory"
-                elif choice == ACTION_TRAJECTORY:
-                    if trajectory_support is None:
-                        raise ValueError("Policy selected action trajectories without a trajectory memory")
-                    hits, retrieval_time = trajectory_support.retrieve(
-                        benchmark, episode.task_prompt, episode.observation, proposed_action)
-                    event = {"mechanism": "m2_trajectory_memory", "selection_policy": TRAJECTORY_POLICY,
-                             "retrieval_seconds": retrieval_time, "retrieval_event": True,
-                             "proposed_action": proposed_action, "retrieved": hits, "action_changed": False}
-                    revision_messages = memory_messages(messages, hits, proposed_action) if hits else None
-                    fallback_reason = "no_trajectory_within_budget"
-                elif choice == RECONSIDERATION:
-                    retrieval_time = 0.0
-                    event = {"mechanism": "reconsideration_only_v1", "support_id": RECONSIDERATION,
-                             "selection_policy": None,
-                             "retrieval_seconds": 0.0, "retrieval_event": False,
-                             "retrieval_performed": False, "retrieved": [],
-                             "proposed_action": proposed_action, "action_changed": False}
-                    revision_messages = reconsideration_messages(messages, proposed_action, benchmark)
-                    fallback_reason = ""
-                else:
-                    raise ValueError(f"Unknown support selected: {choice}")
-                support_calls += 1
-                retrieval_seconds += retrieval_time
+                if choice not in adapters or adapters[choice].phase != "after_proposal":
+                    raise ValueError(f"Policy selected unavailable or misphased support: {choice}")
+                outcome = adapters[choice].invoke(context("after_proposal", decision, available, action, raw), messages, action)
+                event = outcome.event
+                revision_messages = outcome.revision_messages
+                support_calls += outcome.calls
+                retrieval_seconds += outcome.retrieval_seconds
                 record.setdefault("proposed_action", proposed_action)
                 record.setdefault("proposal_raw_model_output", raw)
-                add_support_event(event)
+                if event is not None:
+                    add_support_event(event)
                 if revision_messages is None:
-                    event["fallback_reason"] = fallback_reason
+                    if event is not None and outcome.fallback_reason:
+                        event["fallback_reason"] = outcome.fallback_reason
                     continue
                 revision = model.generate(revision_messages)
                 support_model_calls += 1
@@ -400,7 +363,7 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
     write_json_atomic(directory / "run.json", metadata)
     episodes = []
     try:
-        actual_model = model if model is not None else QwenModel(config)
+        actual_model = model if model is not None else make_model(config)
         if hasattr(actual_model, "torch"):
             metadata["gpu_name"] = actual_model.torch.cuda.get_device_name()
             metadata["torch_cuda_version"] = actual_model.torch.version.cuda
@@ -412,8 +375,9 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         trajectory_support = None
         if trajectory_memory:
             tokenizer = getattr(actual_model, "tokenizer", None)
-            token_counter = (lambda value: len(tokenizer.encode(value, add_special_tokens=False))
-                             if tokenizer is not None else len(value.split()))
+            token_counter = (actual_model.count_tokens if hasattr(actual_model, "count_tokens")
+                             else (lambda value: len(tokenizer.encode(value, add_special_tokens=False))
+                                   if tokenizer is not None else len(value.split())))
             trajectory_support = TrajectoryMemory(
                 trajectory_corpus, trajectory_index,
                 MPNetEmbedder(trajectory_index["embedding_model"],

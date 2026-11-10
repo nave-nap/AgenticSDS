@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
+from typing import Callable
 
 from .common import digest_text
 from .manifests import alfworld_data_root, load_alfworld_config, textcraft_environment
@@ -118,9 +119,20 @@ class ALFWorldEpisode:
         self.env.close()
 
 
+BENCHMARK_REGISTRY: dict[str, Callable[[dict, dict], object]] = {
+    "textcraft": lambda task, config: TextCraftEpisode(task),
+    "alfworld": lambda task, config: ALFWorldEpisode(task, config["alfworld_config"]),
+}
+
+
+def register_benchmark(benchmark_id: str, factory: Callable[[dict, dict], object]) -> None:
+    if not benchmark_id or benchmark_id in BENCHMARK_REGISTRY:
+        raise ValueError(f"Benchmark is empty or already registered: {benchmark_id}")
+    BENCHMARK_REGISTRY[benchmark_id] = factory
+
+
 def make_episode(benchmark: str, task: dict, config: dict):
-    if benchmark == "textcraft":
-        return TextCraftEpisode(task)
-    if benchmark == "alfworld":
-        return ALFWorldEpisode(task, config["alfworld_config"])
-    raise ValueError(f"Unknown benchmark: {benchmark}")
+    try:
+        return BENCHMARK_REGISTRY[benchmark](task, config)
+    except KeyError as exc:
+        raise ValueError(f"Unknown benchmark: {benchmark}") from exc
