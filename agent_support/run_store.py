@@ -22,9 +22,19 @@ def git_state() -> dict:
                               text=True, check=True).stdout
     status = git("status", "--porcelain", "--untracked-files=all")
     diff = git("diff", "--binary", "HEAD")
+    untracked = subprocess.run(["git", "-C", str(root), "ls-files", "--others",
+                                "--exclude-standard", "-z"], capture_output=True, check=True).stdout
+    untracked_digest = hashlib.sha256()
+    for relative in sorted(part for part in untracked.split(b"\0") if part):
+        path = root / relative.decode("utf-8", errors="surrogateescape")
+        untracked_digest.update(relative)
+        untracked_digest.update(b"\0")
+        if path.is_file():
+            untracked_digest.update(hashlib.sha256(path.read_bytes()).digest())
     return {"git_commit": git("rev-parse", "HEAD").strip(), "git_dirty": bool(status.strip()),
             "git_status_sha256": hashlib.sha256(status.encode()).hexdigest(),
-            "git_diff_sha256": hashlib.sha256(diff.encode()).hexdigest()}
+            "git_diff_sha256": hashlib.sha256(diff.encode()).hexdigest(),
+            "git_untracked_sha256": untracked_digest.hexdigest()}
 
 
 def audit_partitions(config: dict, manifest: dict) -> dict:

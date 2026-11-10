@@ -56,6 +56,7 @@ def setup(tmp_path):
               "model_type": "mock", "model_id": "mock", "model_revision": "mock-r1", "seed": 1,
               "max_actions": 2, "max_decisions": 2, "max_model_calls": 2,
               "history_window": 1, "max_new_tokens": 2, "max_support_calls": 0,
+              "do_sample": False,
               "max_support_tokens": 0, "supports": [], "support_versions": {},
               "selection_policy": {"id": "never_v1"}, "output_root": str(tmp_path / "runs")}
     return config, manifest
@@ -80,6 +81,9 @@ def test_resume_verifies_and_skips_completed_episode(monkeypatch, tmp_path):
     assert first.read_bytes() == original
     metadata = read_json(directory / "run.json")
     assert metadata["status"] == "complete"
+    assert metadata["git_commit"] and "git_dirty" in metadata
+    assert metadata["config_file_sha256"] and metadata["manifest_file_sha256"]
+    assert metadata["model_revision"] == "mock-r1"
     assert metadata["checkpoint_history"][-1]["verified_episodes"] == 1
     assert len(list((directory / "episodes").glob("*.json"))) == 2
     with pytest.raises(ValueError, match="complete"):

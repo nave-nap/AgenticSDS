@@ -89,6 +89,12 @@ class FixedConditionPolicy:
 POLICY_REGISTRY = {FixedConditionPolicy.policy_id: FixedConditionPolicy}
 
 
+def register_policy(policy_id: str, factory) -> None:
+    if not policy_id or policy_id in POLICY_REGISTRY:
+        raise ValueError(f"Policy is empty or already registered: {policy_id}")
+    POLICY_REGISTRY[policy_id] = factory
+
+
 class NeverPolicy:
     policy_id = "never_v1"
 
@@ -157,8 +163,8 @@ class FailureTriggeredPolicy:
         self.last_selected_decision = decision
 
 
-POLICY_REGISTRY.update({policy.policy_id: policy for policy in
-                        (NeverPolicy, AlwaysPolicy, RandomPolicy, FailureTriggeredPolicy)})
+for _policy in (NeverPolicy, AlwaysPolicy, RandomPolicy, FailureTriggeredPolicy):
+    register_policy(_policy.policy_id, _policy)
 
 
 def make_support_policy(config: dict, task_id: str = "") -> SupportPolicy:

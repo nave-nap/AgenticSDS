@@ -21,6 +21,7 @@ from .model import make_model
 from .policy import PROMPT_VERSIONS
 from .memory import ActionMemory, RETRIEVAL_POLICY
 from .controllers import run_controller
+from .components import load_components
 from .support_policy import (ACTION_TRAJECTORY, LEGACY_ACTION_MEMORY, RECONSIDERATION, TASK_TRAJECTORY,
                              SupportPolicy, TurnContext, make_support_policy, selection_decision)
 from .supports import build_builtin_resources, load_builtin_artifacts, make_supports
@@ -352,6 +353,7 @@ def summarize(episodes: list[dict]) -> dict:
 def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None = None,
         model=None, episode_factory=make_episode, *, run_key: str | None = None,
         resume: bool = False, config_path: str | Path | None = None) -> Path:
+    component_modules = load_components(config)
     validate_manifest(manifest)
     validate_config(config, manifest["benchmark"])
     if config.get("schema_version") == 2 and read_json(config["manifest"]) != manifest:
@@ -383,127 +385,134 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
     except BlockingIOError as exc:
         lease.close()
         raise RuntimeError(f"Run is already active: {directory}") from exc
-    selected_manifest = dict(manifest)
-    selected_manifest["tasks"] = selected
-    if not resuming:
-        write_json_new(directory / "config.json", config)
-        write_json_new(directory / "manifest.json", selected_manifest)
-    alfworld_config_sha256 = None
-    textcraft_recipe_order_sha256 = None
-    if manifest["benchmark"] == "alfworld":
-        source = Path(config["alfworld_config"])
-        config_bytes = source.read_bytes()
-        alfworld_config_sha256 = hashlib.sha256(config_bytes).hexdigest()
+    try:
+        selected_manifest = dict(manifest)
+        selected_manifest["tasks"] = selected
         if not resuming:
-            (directory / "alfworld_config.yaml").write_bytes(config_bytes)
-    elif manifest["benchmark"] == "textcraft":
-        source = Path(__file__).with_name("textcraft_recipe_order.json")
-        order_bytes = source.read_bytes()
-        textcraft_recipe_order_sha256 = hashlib.sha256(order_bytes).hexdigest()
-        if not resuming:
-            (directory / "textcraft_recipe_order.json").write_bytes(order_bytes)
-    metadata = {
-        "schema_version": 1,
-        "run_id": run_id,
-        "status": "running",
-        "benchmark": manifest["benchmark"],
-        "condition": config["condition"],
-        "partition": manifest.get("partition"),
-        "manifest_sha256": canonical_digest(manifest),
-        "selected_manifest_sha256": canonical_digest(selected_manifest),
-        "selected_task_count": len(selected),
-        "total_manifest_task_count": len(manifest["tasks"]),
-        "limit": limit,
-        "config_sha256": canonical_digest(config),
-        "evaluation_lock_sha256": config.get("evaluation_lock_sha256"),
-        "model_revision": config.get("model_revision"),
-        "alfworld_config_sha256": alfworld_config_sha256,
-        "textcraft_recipe_order_sha256": textcraft_recipe_order_sha256,
-        "git_commit": git_commit(),
-        "python_version": platform.python_version(),
-        "package_versions": package_versions(),
-        "started_utc": datetime.now(timezone.utc).isoformat(),
-    }
-    if config["condition"] != "baseline":
-        metadata["support_policy_id"] = ("adapt_controller_v1" if config["condition"] == "adapt_dynamic_replanning_v1"
-                                         else selected_policy.policy_id)
-    if legacy_memory:
-        legacy_corpus, legacy_index = artifacts["legacy"]["corpus"], artifacts["legacy"]["index"]
-        metadata["memory_corpus_sha256"] = canonical_digest(legacy_corpus)
-        metadata["memory_index_sha256"] = canonical_digest(legacy_index)
-        metadata["legacy_memory_selection_policy"] = RETRIEVAL_POLICY
-        if config["condition"] == "m2_always":
-            metadata["memory_selection_policy"] = RETRIEVAL_POLICY
-    if trajectory_memory:
-        trajectory_corpus, trajectory_index = artifacts["trajectory"]["corpus"], artifacts["trajectory"]["index"]
-        metadata["trajectory_corpus_sha256"] = canonical_digest(trajectory_corpus)
-        metadata["trajectory_index_sha256"] = canonical_digest(trajectory_index)
-        metadata["trajectory_memory_selection_policy"] = TRAJECTORY_POLICY
-        if config["condition"] in TRAJECTORY_CONDITIONS:
-            metadata["memory_selection_policy"] = TRAJECTORY_POLICY
-    expected_artifacts = {key: metadata[key] for key in (
-        "alfworld_config_sha256", "textcraft_recipe_order_sha256", "memory_corpus_sha256",
-        "memory_index_sha256", "trajectory_corpus_sha256", "trajectory_index_sha256") if key in metadata}
-    completed = {}
-    if config.get("schema_version") == 2:
-        metadata["schema_version"] = 2
-        metadata["model_id"] = config["model_id"]
-        metadata["model_type"] = config["model_type"]
-        metadata["prompt_versions"] = {manifest["benchmark"]: PROMPT_VERSIONS.get(manifest["benchmark"],
-                                                      config.get("prompt_version", "custom_v1"))}
-        metadata["support_versions"] = config["support_versions"]
-        metadata["policy_parameters"] = config["selection_policy"]
-        metadata["seed"] = config["seed"]
-        metadata["python_hash_seed"] = os.environ.get("PYTHONHASHSEED")
-        metadata["decoding"] = {"do_sample": False, "max_new_tokens": config["max_new_tokens"]}
-        metadata["budget_limits"] = {key: config[key] for key in
-                                     ("max_actions", "max_decisions", "max_model_calls",
-                                      "max_support_calls", "max_support_tokens")}
-        metadata["partition_manifest_sha256"] = partition_hashes
-        metadata["manifest_file_sha256"] = hashlib.sha256(Path(config["manifest"]).read_bytes()).hexdigest()
-        source = Path(config_path) if config_path is not None else directory / "config.json"
-        metadata["config_file_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
-        metadata["config_source"] = str(source)
-        metadata["effective_output_root"] = str(Path(output_root).resolve())
-        metadata["run_key"] = run_key
-        metadata["platform"] = platform.platform()
-        metadata["checkpoint_history"] = []
-        metadata["checkpoint_history"].append({"event": "created", "at_utc": now_utc(),
-                                               "verified_episodes": 0})
-        provenance = {**git_state(), "python_version": metadata["python_version"],
-                      "package_versions": metadata["package_versions"], "platform": metadata["platform"],
-                      "limit": limit, "selected_task_count": len(selected),
-                      "total_manifest_task_count": len(manifest["tasks"]),
-                      "benchmark": manifest["benchmark"], "condition": config["condition"],
-                      "model_id": config["model_id"], "model_type": config["model_type"],
-                      "model_revision": config["model_revision"], "seed": config["seed"],
-                      "python_hash_seed": metadata["python_hash_seed"],
-                      "prompt_versions": metadata["prompt_versions"],
-                      "support_versions": config["support_versions"],
-                      "policy_parameters": config["selection_policy"],
-                      "budget_limits": metadata["budget_limits"],
-                      "config_file_sha256": metadata["config_file_sha256"],
-                      "effective_output_root": metadata["effective_output_root"],
-                      "run_key": run_key,
-                      "manifest_file_sha256": metadata["manifest_file_sha256"],
-                      "partition_manifest_sha256": partition_hashes}
-        metadata.update(provenance)
+            write_json_new(directory / "config.json", config)
+            write_json_new(directory / "manifest.json", selected_manifest)
+        alfworld_config_sha256 = None
+        textcraft_recipe_order_sha256 = None
+        if manifest["benchmark"] == "alfworld":
+            source = Path(config["alfworld_config"])
+            config_bytes = source.read_bytes()
+            alfworld_config_sha256 = hashlib.sha256(config_bytes).hexdigest()
+            if not resuming:
+                (directory / "alfworld_config.yaml").write_bytes(config_bytes)
+        elif manifest["benchmark"] == "textcraft":
+            source = Path(__file__).with_name("textcraft_recipe_order.json")
+            order_bytes = source.read_bytes()
+            textcraft_recipe_order_sha256 = hashlib.sha256(order_bytes).hexdigest()
+            if not resuming:
+                (directory / "textcraft_recipe_order.json").write_bytes(order_bytes)
+        metadata = {
+            "schema_version": 1,
+            "run_id": run_id,
+            "status": "running",
+            "benchmark": manifest["benchmark"],
+            "condition": config["condition"],
+            "partition": manifest.get("partition"),
+            "manifest_sha256": canonical_digest(manifest),
+            "selected_manifest_sha256": canonical_digest(selected_manifest),
+            "selected_task_count": len(selected),
+            "total_manifest_task_count": len(manifest["tasks"]),
+            "limit": limit,
+            "config_sha256": canonical_digest(config),
+            "evaluation_lock_sha256": config.get("evaluation_lock_sha256"),
+            "model_revision": config.get("model_revision"),
+            "alfworld_config_sha256": alfworld_config_sha256,
+            "textcraft_recipe_order_sha256": textcraft_recipe_order_sha256,
+            "git_commit": git_commit(),
+            "python_version": platform.python_version(),
+            "package_versions": package_versions(),
+            "started_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        if config["condition"] != "baseline":
+            metadata["support_policy_id"] = ("adapt_controller_v1" if config["condition"] == "adapt_dynamic_replanning_v1"
+                                             else selected_policy.policy_id)
+        if legacy_memory:
+            legacy_corpus, legacy_index = artifacts["legacy"]["corpus"], artifacts["legacy"]["index"]
+            metadata["memory_corpus_sha256"] = canonical_digest(legacy_corpus)
+            metadata["memory_index_sha256"] = canonical_digest(legacy_index)
+            metadata["legacy_memory_selection_policy"] = RETRIEVAL_POLICY
+            if config["condition"] == "m2_always":
+                metadata["memory_selection_policy"] = RETRIEVAL_POLICY
+        if trajectory_memory:
+            trajectory_corpus, trajectory_index = artifacts["trajectory"]["corpus"], artifacts["trajectory"]["index"]
+            metadata["trajectory_corpus_sha256"] = canonical_digest(trajectory_corpus)
+            metadata["trajectory_index_sha256"] = canonical_digest(trajectory_index)
+            metadata["trajectory_memory_selection_policy"] = TRAJECTORY_POLICY
+            if config["condition"] in TRAJECTORY_CONDITIONS:
+                metadata["memory_selection_policy"] = TRAJECTORY_POLICY
+        expected_artifacts = {key: metadata[key] for key in (
+            "alfworld_config_sha256", "textcraft_recipe_order_sha256", "memory_corpus_sha256",
+            "memory_index_sha256", "trajectory_corpus_sha256", "trajectory_index_sha256") if key in metadata}
+        completed = {}
+        if config.get("schema_version") == 2:
+            metadata["schema_version"] = 2
+            metadata["model_id"] = config["model_id"]
+            metadata["model_type"] = config["model_type"]
+            metadata["prompt_versions"] = {manifest["benchmark"]: PROMPT_VERSIONS.get(manifest["benchmark"],
+                                                          config.get("prompt_version", "custom_v1"))}
+            metadata["support_versions"] = config["support_versions"]
+            metadata["component_modules"] = component_modules
+            metadata["policy_parameters"] = config["selection_policy"]
+            metadata["seed"] = config["seed"]
+            metadata["python_hash_seed"] = os.environ.get("PYTHONHASHSEED")
+            metadata["decoding"] = {"do_sample": config["do_sample"],
+                                    "max_new_tokens": config["max_new_tokens"]}
+            metadata["budget_limits"] = {key: config[key] for key in
+                                         ("max_actions", "max_decisions", "max_model_calls",
+                                          "max_support_calls", "max_support_tokens")}
+            metadata["partition_manifest_sha256"] = partition_hashes
+            metadata["manifest_file_sha256"] = hashlib.sha256(Path(config["manifest"]).read_bytes()).hexdigest()
+            source = Path(config_path) if config_path is not None else directory / "config.json"
+            metadata["config_file_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+            metadata["config_source"] = str(source)
+            metadata["effective_output_root"] = str(Path(output_root).resolve())
+            metadata["run_key"] = run_key
+            metadata["platform"] = platform.platform()
+            metadata["checkpoint_history"] = []
+            metadata["checkpoint_history"].append({"event": "created", "at_utc": now_utc(),
+                                                   "verified_episodes": 0})
+            provenance = {**git_state(), "python_version": metadata["python_version"],
+                          "package_versions": metadata["package_versions"], "platform": metadata["platform"],
+                          "limit": limit, "selected_task_count": len(selected),
+                          "total_manifest_task_count": len(manifest["tasks"]),
+                          "benchmark": manifest["benchmark"], "condition": config["condition"],
+                          "model_id": config["model_id"], "model_type": config["model_type"],
+                          "model_revision": config["model_revision"], "seed": config["seed"],
+                          "python_hash_seed": metadata["python_hash_seed"],
+                          "prompt_versions": metadata["prompt_versions"],
+                          "support_versions": config["support_versions"],
+                          "component_modules": component_modules,
+                          "policy_parameters": config["selection_policy"],
+                          "budget_limits": metadata["budget_limits"],
+                          "config_file_sha256": metadata["config_file_sha256"],
+                          "effective_output_root": metadata["effective_output_root"],
+                          "run_key": run_key,
+                          "manifest_file_sha256": metadata["manifest_file_sha256"],
+                          "partition_manifest_sha256": partition_hashes}
+            metadata.update(provenance)
+            if resuming:
+                metadata, completed, recovered = verify_resume(
+                    directory, config, selected_manifest, provenance, expected_artifacts)
+                metadata.setdefault("checkpoint_history", []).append({
+                    "event": "resumed", "at_utc": now_utc(), "previous_status": metadata["status"],
+                    "verified_episodes": len(completed), "uncheckpointed_episodes": recovered})
+                metadata["status"] = "running"
+                metadata.pop("error", None)
+                metadata.pop("finished_utc", None)
+                checkpoint(directory, selected, completed)
+            else:
+                checkpoint(directory, selected, completed)
+        write_json_atomic(directory / "run.json", metadata)
+        episodes = [completed[index] for index in sorted(completed)]
         if resuming:
-            metadata, completed, recovered = verify_resume(
-                directory, config, selected_manifest, provenance, expected_artifacts)
-            metadata.setdefault("checkpoint_history", []).append({
-                "event": "resumed", "at_utc": now_utc(), "previous_status": metadata["status"],
-                "verified_episodes": len(completed), "uncheckpointed_episodes": recovered})
-            metadata["status"] = "running"
-            metadata.pop("error", None)
-            metadata.pop("finished_utc", None)
-            checkpoint(directory, selected, completed)
-        else:
-            checkpoint(directory, selected, completed)
-    write_json_atomic(directory / "run.json", metadata)
-    episodes = [completed[index] for index in sorted(completed)]
-    if resuming:
-        write_json_atomic(directory / "summary.json", summarize(episodes))
+            write_json_atomic(directory / "summary.json", summarize(episodes))
+    except BaseException:
+        lease.close()
+        raise
     previous_sigterm = None
     if config.get("schema_version") == 2:
         def request_preemption(number, frame):
@@ -530,7 +539,19 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         resources = build_builtin_resources(config, actual_model, artifacts)
         support, trajectory_support = resources["legacy"], resources["trajectory"]
         if config.get("schema_version") == 2:
-            make_supports(config, actual_model, resources)  # Validate versions before inference.
+            adapters = make_supports(config, actual_model, resources)  # Validate before inference.
+            support_artifacts = {}
+            for support_id, adapter in adapters.items():
+                external_requirements = set(adapter.requirements) - {"valid_proposal"}
+                if (external_requirements and support_id not in
+                        {LEGACY_ACTION_MEMORY, TASK_TRAJECTORY, ACTION_TRAJECTORY}
+                        and not hasattr(adapter, "provenance")):
+                    raise ValueError(f"Support {support_id} must report provenance for its requirements")
+                support_artifacts[support_id] = adapter.provenance() if hasattr(adapter, "provenance") else {}
+            if resuming and metadata.get("support_artifacts") not in (None, support_artifacts):
+                raise ValueError("Support artifact provenance differs from prior process")
+            metadata["support_artifacts"] = support_artifacts
+            write_json_atomic(directory / "run.json", metadata)
         for index, task in enumerate(selected):
             if index in completed:
                 continue
@@ -567,8 +588,10 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
             signal.signal(signal.SIGTERM, previous_sigterm)
         metadata["completed_task_count"] = len(episodes)
         metadata["finished_utc"] = datetime.now(timezone.utc).isoformat()
-        write_json_atomic(directory / "run.json", metadata)
-        lease.close()
+        try:
+            write_json_atomic(directory / "run.json", metadata)
+        finally:
+            lease.close()
     return directory
 
 

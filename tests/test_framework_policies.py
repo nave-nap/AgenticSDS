@@ -47,7 +47,7 @@ def config(policy, **extra):
     return {"schema_version": 2, "condition": "modular_v1", "benchmark": "textcraft",
             "max_actions": 3, "max_decisions": 3, "max_model_calls": 6,
             "max_support_calls": 3, "max_support_tokens": 30,
-            "history_window": 1, "max_new_tokens": 2, "seed": 5,
+            "history_window": 1, "max_new_tokens": 2, "seed": 5, "do_sample": False,
             "supports": ["mock"], "selection_policy": policy, **extra}
 
 
@@ -103,6 +103,16 @@ def test_always_policy_budget_checks_before_generation(monkeypatch):
                          model, episode_factory=lambda *args: Episode())
     assert model.calls == 1 and result["status"] == "max_model_calls"
     assert result["support_calls"] == 0
+
+    model = Model()
+    result = run_episode("textcraft", {"task_id": "a"},
+                         config(policy, max_actions=1, max_model_calls=2,
+                                max_support_calls=1, max_support_tokens=6),
+                         model, episode_factory=lambda *args: Episode())
+    event = result["trace"][0]["support_events"][0]
+    assert model.calls == 2 and result["budgets"]["used"]["support_tokens"] == 6
+    assert event["reserved_tokens_before_generation"] == 6
+    assert event["actual_tokens_after_generation"] == 6
 
 
 def test_v2_configuration_pins_components_and_policy_parameters(monkeypatch):

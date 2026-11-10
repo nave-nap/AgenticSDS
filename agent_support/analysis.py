@@ -378,17 +378,84 @@ def compare_trajectory(left_dir: str | Path, right_dir: str | Path) -> dict:
             "tasks": rows}
 
 
+def compare_modular(left_dir: str | Path, right_dir: str | Path) -> dict:
+    """Compare complete v2 runs on one frozen task manifest, retaining task costs."""
+    left_meta, left_config, left_manifest, left = load_run(left_dir)
+    right_meta, right_config, right_manifest, right = load_run(right_dir)
+    if left_meta.get("schema_version") != 2 or right_meta.get("schema_version") != 2:
+        raise ValueError("Modular comparison requires two schema-v2 runs")
+    if (left_manifest != right_manifest or left_meta["selected_manifest_sha256"] !=
+            right_meta["selected_manifest_sha256"] or left_meta["benchmark"] != right_meta["benchmark"]):
+        raise ValueError("Modular comparison requires the same frozen task manifest")
+    if left_manifest.get("partition") == "heldout" and (
+            not left_meta.get("evaluation_lock_sha256") or
+            left_meta.get("evaluation_lock_sha256") != right_meta.get("evaluation_lock_sha256")):
+        raise ValueError("Held-out comparison requires one evaluation lock")
+
+    def row(item: dict) -> dict:
+        decisions = [phase for step in item["trace"] for phase in
+                     (step.get("support_policy", {}).get("before_decision"),
+                      step.get("support_policy", {}).get("after_decision")) if phase]
+        return {"success": item["success"], "status": item["status"],
+                "environment_actions": item["environment_actions"],
+                "failed_actions": item["failed_actions"], "model_calls": item["model_calls"],
+                "input_tokens": item["input_tokens"], "output_tokens": item["output_tokens"],
+                "support_calls": item["support_calls"],
+                "policy_invocations": sum(bool(decision["invoke"]) for decision in decisions),
+                "policy_triggers": [decision["trigger"] for decision in decisions if decision["invoke"]]}
+
+    tasks = [{"task_id": task["task_id"], "left": row(left[task["task_id"]]),
+              "right": row(right[task["task_id"]])} for task in left_manifest["tasks"]]
+
+    def totals(side: str) -> dict:
+        rows = [task[side] for task in tasks]
+        return {"successes": sum(item["success"] for item in rows),
+                "environment_actions": sum(item["environment_actions"] for item in rows),
+                "failed_actions": sum(item["failed_actions"] for item in rows),
+                "model_calls": sum(item["model_calls"] for item in rows),
+                "input_tokens": sum(item["input_tokens"] for item in rows),
+                "output_tokens": sum(item["output_tokens"] for item in rows),
+                "support_calls": sum(item["support_calls"] for item in rows),
+                "policy_invocations": sum(item["policy_invocations"] for item in rows)}
+
+    return {"benchmark": left_meta["benchmark"], "partition": left_manifest.get("partition"),
+            "manifest_sha256": left_meta["selected_manifest_sha256"],
+            "left": {"run_id": left_meta["run_id"], "model": left_meta["model_metadata"],
+                     "policy": left_meta["policy_parameters"],
+                     "support_versions": left_meta["support_versions"],
+                     "budget_limits": left_meta["budget_limits"],
+                     "decoding": left_meta["decoding"],
+                     "git_commit": left_meta["git_commit"],
+                     "config_sha256": left_meta["config_sha256"],
+                     "totals": totals("left")},
+            "right": {"run_id": right_meta["run_id"], "model": right_meta["model_metadata"],
+                      "policy": right_meta["policy_parameters"],
+                      "support_versions": right_meta["support_versions"],
+                      "budget_limits": right_meta["budget_limits"],
+                      "decoding": right_meta["decoding"],
+                      "git_commit": right_meta["git_commit"],
+                      "config_sha256": right_meta["config_sha256"],
+                      "totals": totals("right")},
+            "paired": {"helped": sum(not item["left"]["success"] and item["right"]["success"]
+                                     for item in tasks),
+                       "hurt": sum(item["left"]["success"] and not item["right"]["success"]
+                                   for item in tasks)},
+            "tasks": tasks}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("left_run")
     parser.add_argument("right_run")
     parser.add_argument("--support-comparison", action="store_true", help="Compare a full baseline run with a full M2 development run")
     parser.add_argument("--trajectory-comparison", action="store_true", help="Compare full development or held-out runs across support conditions")
+    parser.add_argument("--modular-comparison", action="store_true", help="Compare complete schema-v2 runs on one manifest")
     parser.add_argument("--output", help="Write the comparison JSON to this path")
     args = parser.parse_args()
-    if args.support_comparison and args.trajectory_comparison:
+    if sum((args.support_comparison, args.trajectory_comparison, args.modular_comparison)) > 1:
         parser.error("Choose only one comparison mode")
-    result = (compare_trajectory(args.left_run, args.right_run) if args.trajectory_comparison else
+    result = (compare_modular(args.left_run, args.right_run) if args.modular_comparison else
+              compare_trajectory(args.left_run, args.right_run) if args.trajectory_comparison else
               compare_support(args.left_run, args.right_run) if args.support_comparison else
               compare(args.left_run, args.right_run))
     if args.output:

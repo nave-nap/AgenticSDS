@@ -17,6 +17,7 @@
   "max_decisions": 30,
   "max_model_calls": 40,
   "max_new_tokens": 100,
+  "do_sample": false,
   "max_support_calls": 10,
   "max_support_tokens": 20000,
   "supports": ["proposal_reconsideration_without_retrieval"],

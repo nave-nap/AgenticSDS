@@ -6,12 +6,16 @@ from typing import Callable
 
 
 CONTROLLER_REGISTRY: dict[str, Callable] = {}
+CONTROLLER_VALIDATORS: dict[str, Callable[[dict], None]] = {}
 
 
-def register_controller(controller_id: str, runner: Callable) -> None:
+def register_controller(controller_id: str, runner: Callable,
+                        validator: Callable[[dict], None] | None = None) -> None:
     if not controller_id or controller_id in CONTROLLER_REGISTRY:
         raise ValueError(f"Controller is empty or already registered: {controller_id}")
     CONTROLLER_REGISTRY[controller_id] = runner
+    if validator is not None:
+        CONTROLLER_VALIDATORS[controller_id] = validator
 
 
 def run_controller(controller_id: str, task: dict, config: dict, model, episode_factory) -> dict:

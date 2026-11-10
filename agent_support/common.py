@@ -38,6 +38,11 @@ def write_json_atomic(path: str | Path, value: Any) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, target)
+        directory_fd = os.open(target.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -161,10 +166,11 @@ def validate_experiment_config(config: dict, benchmark: str) -> None:
     from .model import MODEL_REGISTRY
     from .support_policy import POLICY_REGISTRY
     from .supports import SUPPORT_REGISTRY
-    from .controllers import CONTROLLER_REGISTRY
-    from .benchmarks import BENCHMARK_REGISTRY
+    from .controllers import CONTROLLER_REGISTRY, CONTROLLER_VALIDATORS
+    from .benchmarks import BENCHMARK_DRIVERS, BENCHMARK_REGISTRY
 
-    if config.get("benchmark") != benchmark or benchmark not in BENCHMARK_REGISTRY:
+    if (config.get("benchmark") != benchmark or benchmark not in BENCHMARK_REGISTRY
+            or benchmark not in BENCHMARK_DRIVERS):
         raise ValueError("Unknown or mismatched benchmark")
     for key in ("manifest", "output_root", "model_id", "model_revision"):
         if not isinstance(config.get(key), str) or not config[key]:
@@ -179,6 +185,10 @@ def validate_experiment_config(config: dict, benchmark: str) -> None:
             raise ValueError("Qwen model_revision must be an exact 40-character commit")
         if config.get("quantization") != "nf4_4bit":
             raise ValueError("Qwen requires NF4 4-bit quantization")
+    if type(config.get("do_sample")) is not bool:
+        raise ValueError("do_sample must be explicit and Boolean")
+    if config["model_type"] == "qwen" and config["do_sample"]:
+        raise ValueError("The reference Qwen adapter preserves greedy decoding")
     for key in ("max_actions", "max_model_calls", "max_decisions", "history_window", "max_new_tokens"):
         if type(config.get(key)) is not int or config[key] <= 0:
             raise ValueError(f"{key} must be a positive integer")
@@ -225,7 +235,9 @@ def validate_experiment_config(config: dict, benchmark: str) -> None:
     controller = config.get("controller")
     if controller is not None and controller not in CONTROLLER_REGISTRY:
         raise ValueError("Unknown controller")
-    if controller == "adapt_dynamic_replanning_v1" and benchmark != "textcraft":
-        raise ValueError("ADaPT supports TextCraft only")
+    if controller is not None:
+        if controller not in CONTROLLER_VALIDATORS:
+            raise ValueError("Schema-v2 controller needs its own budget and compatibility validator")
+        CONTROLLER_VALIDATORS[controller](config)
     if config.get("condition") != "modular_v1" and controller is None:
         raise ValueError("v2 condition must be modular_v1")

@@ -24,7 +24,7 @@ resume_args=()
 if [[ -e "$run_directory" ]]; then
   resume_args=(--resume)
 fi
-"$venv_path/bin/python" -m agent_support.runner \
+exec "$venv_path/bin/python" -m agent_support.runner \
   --config "$AGENT_SUPPORT_CONFIG" \
   --output-root "$result_root" \
   --run-key "$run_key" \

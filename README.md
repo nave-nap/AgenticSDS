@@ -1,5 +1,10 @@
 # Agent support research
 
+The [modular development framework](docs/modular_framework.md) adds schema-v2
+component registries, configurable support-selection policies, provenance, and
+verified checkpoint recovery on an isolated branch. Existing schema-v1
+experiments and their frozen comparison protocol remain available.
+
 This repository starts with a reproducible **no-support baseline** for ALFWorld and TextCraft and adds support conditions for paired evaluation. The exploratory notebooks remain in `Support Testing/` as source material. The Python package is the experiment implementation; the Colab notebooks install dependencies and invoke it.
 
 ## Baseline decisions

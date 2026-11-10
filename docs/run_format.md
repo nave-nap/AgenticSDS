@@ -1,5 +1,11 @@
 # Run format
 
+Schema-v2 development runs add `checkpoint.json`, immutable episode
+publication, component and artifact provenance, structured policy decisions,
+budget usage, and verified restart history. See the
+[modular framework guide](modular_framework.md). The schema-v1 format below
+remains readable by the same analysis loader.
+
 Each invocation creates `results/<benchmark>_<UTC timestamp>_<random suffix>/` with:
 
 ```text
