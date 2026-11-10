@@ -1,5 +1,7 @@
 # Run the trajectory-memory experiment on a Slurm cluster
 
+For the separate development implementation of ADaPT dynamic replanning, see [ADaPT TextCraft development](adapt_dynamic_replanning.md). It uses its own branch, configs, results directory, and smoke job; the frozen held-out evaluation remains unchanged.
+
 For the frozen 100-task TextCraft follow-up comparing baseline, M2, and reconsideration, use the [held-out evaluation protocol](textcraft_heldout_evaluation.md). It uses the existing Python 3.12/PyTorch environment, a CPU freeze job, development smoke tests, and three sequential GPU batch jobs.
 
 The cluster workflow uses the same Python runner as Colab. Evan's account is on Penn's Locust cluster at `locust-login.seas.upenn.edu`. SSH uses the PennKey username `evanpan`, password, and two-factor authentication. Off campus, connect to the [Penn VPN](https://hpc.engineering.upenn.edu/using-penn-vpn-to-access-resources/) first. The Slurm partition, account, Python module, and GPU model must be checked from the account's allocation. Slurm's [official `sbatch` documentation](https://slurm.schedmd.com/sbatch.html) describes the resource flags used here.

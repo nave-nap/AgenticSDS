@@ -1,0 +1,18 @@
+{
+  "benchmark": "textcraft",
+  "condition": "adapt_dynamic_replanning_v1",
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "quantization": "nf4_4bit",
+  "seed": 42,
+  "history_window": 8,
+  "max_actions": 120,
+  "max_decisions": 120,
+  "max_new_tokens": 150,
+  "adapt_max_depth": 4,
+  "adapt_max_executor_steps": 39,
+  "adapt_max_environment_actions": 120,
+  "adapt_max_planner_calls": 16,
+  "adapt_max_model_calls": 120,
+  "adapt_executor_max_new_tokens": 150,
+  "adapt_planner_max_new_tokens": 800
+}

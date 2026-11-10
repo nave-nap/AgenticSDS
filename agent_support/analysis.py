@@ -90,7 +90,10 @@ def compare(left: str | Path, right: str | Path) -> dict:
 
 SUPPORT_ONLY_CONFIG_KEYS = {"condition", "memory_corpus", "memory_index", "memory_top_k",
                             "trajectory_corpus", "trajectory_index", "trajectory_top_k",
-                            "trajectory_token_budget", "alfworld_config", "support_policy"}
+                            "trajectory_token_budget", "alfworld_config", "support_policy",
+                            "adapt_max_depth", "adapt_max_executor_steps", "adapt_max_environment_actions",
+                            "adapt_max_planner_calls", "adapt_max_model_calls",
+                            "adapt_executor_max_new_tokens", "adapt_planner_max_new_tokens"}
 
 
 def compare_support(baseline_dir: str | Path, supported_dir: str | Path) -> dict:
@@ -215,7 +218,7 @@ def compare_trajectory(left_dir: str | Path, right_dir: str | Path) -> dict:
     left_meta, left_config, left_manifest, left_results = load_run(left_dir)
     right_meta, right_config, right_manifest, right_results = load_run(right_dir)
     trajectory_conditions = {"expel_retrieval_only_v1", "m2_trajectory_v1"}
-    conditions = {"baseline", "reconsideration_only_v1", *trajectory_conditions}
+    conditions = {"baseline", "reconsideration_only_v1", "adapt_dynamic_replanning_v1", *trajectory_conditions}
     left_condition, right_condition = left_config.get("condition"), right_config.get("condition")
     if left_condition not in conditions or right_condition not in conditions or left_condition == right_condition:
         raise ValueError("Expected two distinct supported conditions")
@@ -226,6 +229,10 @@ def compare_trajectory(left_dir: str | Path, right_dir: str | Path) -> dict:
     partition = left_manifest.get("partition")
     if partition not in {"development", "heldout"}:
         raise ValueError("Support comparison requires development or held-out runs")
+    if partition == "heldout" and "adapt_dynamic_replanning_v1" in (left_condition, right_condition):
+        raise ValueError("ADaPT is development-only; the frozen held-out protocol excludes it")
+    if "adapt_dynamic_replanning_v1" in (left_condition, right_condition) and left_meta.get("git_commit") != right_meta.get("git_commit"):
+        raise ValueError("ADaPT development comparison requires the same code commit")
     for name, meta, manifest in (("left", left_meta, left_manifest), ("right", right_meta, right_manifest)):
         if (meta.get("partition") != partition or manifest.get("partition") != partition
                 or meta.get("limit") is not None

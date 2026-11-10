@@ -70,7 +70,7 @@ TRAJECTORY_CONDITIONS = {"expel_retrieval_only_v1", "m2_trajectory_v1"}
 
 
 def validate_config(config: dict, benchmark: str) -> None:
-    if config.get("benchmark") != benchmark or config.get("condition") not in {"baseline", "m2_always", "reconsideration_only_v1", *TRAJECTORY_CONDITIONS}:
+    if config.get("benchmark") != benchmark or config.get("condition") not in {"baseline", "m2_always", "reconsideration_only_v1", "adapt_dynamic_replanning_v1", *TRAJECTORY_CONDITIONS}:
         raise ValueError("Config benchmark or condition is invalid")
     if config.get("quantization") != "nf4_4bit":
         raise ValueError("Baseline requires NF4 4-bit quantization")
@@ -86,6 +86,22 @@ def validate_config(config: dict, benchmark: str) -> None:
     if "support_policy" in config and (not isinstance(config["support_policy"], str)
                                        or not config["support_policy"]):
         raise ValueError("support_policy must be a nonempty policy ID")
+    if config["condition"] == "adapt_dynamic_replanning_v1":
+        if benchmark != "textcraft":
+            raise ValueError("ADaPT development condition currently supports TextCraft only")
+        for key in ("adapt_max_depth", "adapt_max_executor_steps", "adapt_max_environment_actions",
+                    "adapt_max_planner_calls", "adapt_max_model_calls",
+                    "adapt_executor_max_new_tokens", "adapt_planner_max_new_tokens"):
+            if not isinstance(config.get(key), int) or config[key] <= 0:
+                raise ValueError(f"ADaPT requires a positive {key}")
+        if (config["adapt_max_environment_actions"] != config["max_actions"]
+                or config["adapt_max_model_calls"] != config["max_decisions"]
+                or config["adapt_executor_max_new_tokens"] != config["max_new_tokens"]):
+            raise ValueError("ADaPT shared action, decision, and executor-token limits must match their explicit budgets")
+        if any(key in config for key in ("memory_corpus", "memory_index", "memory_top_k",
+                                      "trajectory_corpus", "trajectory_index", "trajectory_top_k",
+                                      "trajectory_token_budget")):
+            raise ValueError("ADaPT cannot combine with memory or retrieval in v1")
     if config["condition"] == "reconsideration_only_v1" and any(
         key in config for key in ("memory_corpus", "memory_index", "memory_top_k",
                               "trajectory_corpus", "trajectory_index", "trajectory_top_k",

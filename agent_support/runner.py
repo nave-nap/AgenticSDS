@@ -43,6 +43,9 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                 support: ActionMemory | None = None,
                 trajectory_support: TrajectoryMemory | None = None,
                 support_policy: SupportPolicy | None = None) -> dict:
+    if config.get("condition") == "adapt_dynamic_replanning_v1":
+        from .adapt import run_adapt_episode
+        return run_adapt_episode(task, config, model, episode_factory)
     episode = episode_factory(benchmark, task, config)
     started = time.perf_counter()
     history: list[dict] = []
@@ -297,6 +300,10 @@ def summarize(episodes: list[dict]) -> dict:
         for key in ("model_calls", "support_calls", "support_model_calls", "support_input_tokens",
                     "support_output_tokens", "support_parse_errors", "retrieval_seconds", "actions_changed_by_support"):
             summary[key] = round(sum(item[key] for item in episodes), 3) if key == "retrieval_seconds" else sum(item[key] for item in episodes)
+    if episodes and "planner_calls" in episodes[0]:
+        for key in ("planner_calls", "executor_model_calls", "decompositions",
+                    "plan_parse_errors", "false_completion_claims"):
+            summary[key] = sum(item[key] for item in episodes)
     return summary
 
 
@@ -376,7 +383,8 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         "started_utc": datetime.now(timezone.utc).isoformat(),
     }
     if config["condition"] != "baseline":
-        metadata["support_policy_id"] = selected_policy.policy_id
+        metadata["support_policy_id"] = ("adapt_controller_v1" if config["condition"] == "adapt_dynamic_replanning_v1"
+                                         else selected_policy.policy_id)
     if legacy_memory:
         metadata["memory_corpus_sha256"] = canonical_digest(legacy_corpus)
         metadata["memory_index_sha256"] = canonical_digest(legacy_index)

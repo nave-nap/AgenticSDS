@@ -32,7 +32,7 @@ class QwenModel:
         )
         self.model.eval()
 
-    def generate(self, messages: list[dict]) -> dict:
+    def generate(self, messages: list[dict], max_new_tokens: int | None = None) -> dict:
         input_ids = self.tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
         )
@@ -43,7 +43,7 @@ class QwenModel:
                 input_ids=input_ids,
                 attention_mask=self.torch.ones_like(input_ids),
                 do_sample=False,
-                max_new_tokens=self.max_new_tokens,
+                max_new_tokens=self.max_new_tokens if max_new_tokens is None else max_new_tokens,
                 pad_token_id=self.tokenizer.eos_token_id,
             )
         output_ids = generated[0][input_ids.shape[1]:]

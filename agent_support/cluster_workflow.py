@@ -21,7 +21,8 @@ from .trajectory_memory import MPNetEmbedder, build_trajectory_corpus, build_tra
 REPO = Path(__file__).resolve().parent.parent
 CONDITION_CONFIGS = {"baseline": "baseline", "expel_retrieval_only_v1": "expel_retrieval",
                      "m2_trajectory_v1": "m2_trajectory",
-                     "reconsideration_only_v1": "reconsideration_only"}
+                     "reconsideration_only_v1": "reconsideration_only",
+                     "adapt_dynamic_replanning_v1": "adapt_dynamic_replanning"}
 
 
 def training_run(root: Path, benchmark: str) -> Path:

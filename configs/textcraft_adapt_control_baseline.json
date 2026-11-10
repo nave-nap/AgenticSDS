@@ -1,0 +1,11 @@
+{
+  "benchmark": "textcraft",
+  "condition": "baseline",
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "quantization": "nf4_4bit",
+  "seed": 42,
+  "history_window": 8,
+  "max_actions": 120,
+  "max_decisions": 120,
+  "max_new_tokens": 150
+}
