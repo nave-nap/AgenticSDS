@@ -20,12 +20,11 @@ export PYTHONHASHSEED=0
 export HF_HOME="${HF_HOME:-$AGENT_SUPPORT_DATA/hf_cache}"
 mkdir -p "$result_root" "$HF_HOME"
 
-resume_args=()
-if [[ -e "$run_directory" ]]; then
-  resume_args=(--resume)
+runner_args=(--config "$AGENT_SUPPORT_CONFIG" --output-root "$result_root" --run-key "$run_key")
+if [[ -n "${AGENT_SUPPORT_LIMIT:-}" ]]; then
+  runner_args+=(--limit "$AGENT_SUPPORT_LIMIT")
 fi
-exec "$venv_path/bin/python" -m agent_support.runner \
-  --config "$AGENT_SUPPORT_CONFIG" \
-  --output-root "$result_root" \
-  --run-key "$run_key" \
-  "${resume_args[@]}"
+if [[ -e "$run_directory" ]]; then
+  runner_args+=(--resume)
+fi
+exec "$venv_path/bin/python" -m agent_support.runner "${runner_args[@]}"

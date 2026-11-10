@@ -2,6 +2,8 @@
 
 from dataclasses import replace
 
+import pytest
+
 from agent_support.runner import run_episode
 from agent_support.common import validate_config
 from agent_support.model import MODEL_REGISTRY
@@ -113,6 +115,52 @@ def test_always_policy_budget_checks_before_generation(monkeypatch):
     assert model.calls == 2 and result["budgets"]["used"]["support_tokens"] == 6
     assert event["reserved_tokens_before_generation"] == 6
     assert event["actual_tokens_after_generation"] == 6
+
+
+def test_support_call_reservation_rejects_undeclared_usage(monkeypatch):
+    monkeypatch.setitem(SUPPORT_REGISTRY, "mock", lambda spec, model, resources: MockSupport())
+    class TwoCallSupport(MockSupport):
+        def invoke(self, context, messages, action):
+            return SupportResult(messages, calls=2)
+
+    model = Model()
+    with pytest.raises(RuntimeError, match="reported 2 calls after reserving 1"):
+        run_episode("textcraft", {"task_id": "a"},
+                    config({"id": "always_v1", "support_id": "mock"}, max_support_calls=1),
+                    model, episode_factory=lambda *args: Episode(),
+                    support_adapters={"mock": TwoCallSupport()})
+    assert model.calls == 1
+
+    class DeclaredTwoCallSupport(TwoCallSupport):
+        def expected_calls(self):
+            return 2
+
+    blocked = DeclaredTwoCallSupport()
+    result = run_episode("textcraft", {"task_id": "a"},
+                         config({"id": "always_v1", "support_id": "mock"}, max_support_calls=1),
+                         Model(), episode_factory=lambda *args: Episode(),
+                         support_adapters={"mock": blocked})
+    assert result["support_calls"] == 0
+    assert result["trace"][0]["support_policy"]["blocked"][0]["reason"] == "support_call_budget"
+
+
+def test_actual_support_tokens_exceeding_reservation_fail_visibly(monkeypatch):
+    monkeypatch.setitem(SUPPORT_REGISTRY, "mock", lambda spec, model, resources: MockSupport())
+    class UndercountingModel(Model):
+        def generate(self, messages):
+            result = super().generate(messages)
+            if self.calls == 2:
+                result["input_tokens"] = 7
+            return result
+
+    model = UndercountingModel()
+    with pytest.raises(RuntimeError, match="actual=9, reserved=6, limit=6"):
+        run_episode("textcraft", {"task_id": "a"},
+                    config({"id": "always_v1", "support_id": "mock"},
+                           max_actions=1, max_support_tokens=6),
+                    model, episode_factory=lambda *args: Episode(),
+                    support_adapters={"mock": MockSupport()})
+    assert model.calls == 2
 
 
 def test_v2_configuration_pins_components_and_policy_parameters(monkeypatch):

@@ -103,6 +103,10 @@ register_policy("example_policy_v1", ExamplePolicy)
     control_config = {**config, "selection_policy": {"id": "never_v1"}}
     control = run(control_config, dev, tmp_path / "runs",
                   episode_factory=lambda _, task, config: Episode(task))
+    control_decision = load_run(control)[3][dev["tasks"][0]["task_id"]]["trace"][0]["support_policy"]
+    assert control_decision["before_decision"]["reason"] == "never"
+    assert control_decision["after_decision"]["reason"] == "never"
+    assert not control_decision["after_decision"]["invoke"]
     report = compare_modular(control, directory)
     assert report["paired"] == {"helped": 1, "hurt": 0}
     assert report["right"]["totals"]["support_calls"] == 1

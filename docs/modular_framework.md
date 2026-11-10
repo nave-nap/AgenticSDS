@@ -120,6 +120,9 @@ register_support("my_support", lambda config, model, resources: MySupport())
 
 Return a modified `messages` value for a pre-proposal support. Return
 `revision_messages=None` when no extra model call is needed. An adapter that
+may make more than one support call must implement `expected_calls()` with its
+pre-invocation reservation; reporting more calls than reserved fails the run.
+An adapter that
 reads an external artifact must validate its compatibility and expose
 `provenance()` with content hashes; the runner verifies this on restart. List
 the support in `supports`, pin its `support_versions` entry, and refer to its
@@ -184,7 +187,8 @@ checkpoint.
 On Locust, submit [`scripts/locust_modular_job.sh`](../scripts/locust_modular_job.sh)
 with your allocation's account, partition, GPU, memory, and time flags. Set
 `AGENT_SUPPORT_DATA`, `AGENT_SUPPORT_CONFIG`, and `VENV_PATH` as needed before
-`sbatch`. The script uses the Slurm job ID as the stable key, requests a
+`sbatch`. Set `AGENT_SUPPORT_LIMIT=3` for a three-task smoke run. The script
+uses the Slurm job ID as the stable key, requests a
 60-second termination signal, and verifies any existing run before resuming.
 It does not launch a job by itself.
 

@@ -78,9 +78,9 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
     policy = support_policy or make_support_policy(config, task["task_id"])
     adapters = support_adapters or make_supports(config, model, {"legacy": support, "trajectory": trajectory_support})
 
-    def budget_block(choice: str, require_model: bool = False) -> str | None:
-        adapter = adapters[choice]
-        expected = adapter.expected_calls() if hasattr(adapter, "expected_calls") else 1
+    def budget_block(expected: int, require_model: bool = False) -> str | None:
+        if type(expected) is not int or expected < 0:
+            raise ValueError("Support expected_calls must be a nonnegative integer")
         if "max_support_calls" in config and support_calls + expected > config["max_support_calls"]:
             return "support_call_budget"
         if require_model and "max_model_calls" in config and model_calls >= config["max_model_calls"]:
@@ -126,10 +126,15 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
             for choice in before:
                 if choice not in adapters or adapters[choice].phase != "before_proposal":
                     raise ValueError(f"Policy selected unavailable or misphased support: {choice}")
-                if reason := budget_block(choice):
+                adapter = adapters[choice]
+                expected = adapter.expected_calls() if hasattr(adapter, "expected_calls") else 1
+                if reason := budget_block(expected):
                     blocked_supports.append({"support_id": choice, "reason": reason})
                     continue
-                outcome = adapters[choice].invoke(context("before_proposal", decision, available), messages, None)
+                outcome = adapter.invoke(context("before_proposal", decision, available), messages, None)
+                if config.get("schema_version") == 2 and (type(outcome.calls) is not int or
+                        outcome.calls < 0 or outcome.calls > expected):
+                    raise RuntimeError(f"Support {choice} reported {outcome.calls} calls after reserving {expected}")
                 messages = outcome.messages
                 support_calls += outcome.calls
                 retrieval_seconds += outcome.retrieval_seconds
@@ -175,10 +180,15 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                 proposed_action = action
                 if choice not in adapters or adapters[choice].phase != "after_proposal":
                     raise ValueError(f"Policy selected unavailable or misphased support: {choice}")
-                if reason := budget_block(choice, require_model=True):
+                adapter = adapters[choice]
+                expected = adapter.expected_calls() if hasattr(adapter, "expected_calls") else 1
+                if reason := budget_block(expected, require_model=True):
                     blocked_supports.append({"support_id": choice, "reason": reason})
                     continue
-                outcome = adapters[choice].invoke(context("after_proposal", decision, available, action, raw), messages, action)
+                outcome = adapter.invoke(context("after_proposal", decision, available, action, raw), messages, action)
+                if config.get("schema_version") == 2 and (type(outcome.calls) is not int or
+                        outcome.calls < 0 or outcome.calls > expected):
+                    raise RuntimeError(f"Support {choice} reported {outcome.calls} calls after reserving {expected}")
                 event = outcome.event
                 revision_messages = outcome.revision_messages
                 support_calls += outcome.calls
@@ -211,7 +221,10 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                 model_calls += 1
                 if "max_support_tokens" in config and (
                         revision["input_tokens"] + revision["output_tokens"] > reserve):
-                    raise RuntimeError("Model token accounting exceeded the reserved support-token budget")
+                    actual = revision["input_tokens"] + revision["output_tokens"]
+                    raise RuntimeError(f"Model token accounting exceeded the reserved support-token budget: "
+                                       f"actual={actual}, reserved={reserve}, "
+                                       f"limit={config['max_support_tokens']}")
                 support_model_calls += 1
                 support_input_tokens += revision["input_tokens"]
                 support_output_tokens += revision["output_tokens"]
