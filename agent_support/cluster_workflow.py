@@ -20,7 +20,8 @@ from .trajectory_memory import MPNetEmbedder, build_trajectory_corpus, build_tra
 
 REPO = Path(__file__).resolve().parent.parent
 CONDITION_CONFIGS = {"baseline": "baseline", "expel_retrieval_only_v1": "expel_retrieval",
-                     "m2_trajectory_v1": "m2_trajectory"}
+                     "m2_trajectory_v1": "m2_trajectory",
+                     "reconsideration_only_v1": "reconsideration_only"}
 
 
 def training_run(root: Path, benchmark: str) -> Path:
@@ -71,10 +72,11 @@ def frozen_compatibility(root: Path, benchmark: str) -> list[str]:
     return problems
 
 
-def preflight(root: Path, benchmark: str, require_gpu: bool = False) -> dict:
-    for partition in ("training", "development", "heldout"):
+def preflight(root: Path, benchmark: str, require_gpu: bool = False,
+              require_training: bool = True) -> dict:
+    for partition in (("training", "development", "heldout") if require_training else ("development",)):
         manifest_path(root, benchmark, partition)
-    training = training_run(root, benchmark)
+    training = training_run(root, benchmark) if require_training else None
     frozen_baseline(root, benchmark)
     if benchmark == "alfworld":
         data = Path(os.environ.get("ALFWORLD_DATA", str(root / "alfworld")))
@@ -90,7 +92,7 @@ def preflight(root: Path, benchmark: str, require_gpu: bool = False) -> dict:
     storage = {"data_root": root, "alfworld_data": Path(os.environ.get("ALFWORLD_DATA", str(root / "alfworld"))),
                "model_cache": Path(os.environ.get("HF_HOME", str(root / "hf_cache")))}
     home_paths = [name for name, path in storage.items() if path.expanduser().resolve().is_relative_to(home)]
-    return {"benchmark": benchmark, "training_run": training.name,
+    return {"benchmark": benchmark, "training_run": training.name if training else None,
             "frozen_baseline_compatible": not mismatches,
             "frozen_baseline_mismatches": mismatches,
             "home_resident_storage": home_paths}
@@ -123,7 +125,7 @@ def resolved_config(root: Path, benchmark: str, condition: str) -> dict:
     config = read_json(REPO / "configs" / f"{benchmark}_{CONDITION_CONFIGS[condition]}.json")
     if benchmark == "alfworld":
         config["alfworld_config"] = str((root / "alfworld_config.yaml").resolve())
-    if condition != "baseline":
+    if condition in {"expel_retrieval_only_v1", "m2_trajectory_v1"}:
         directory = (root / "trajectory_memory" / benchmark).resolve()
         config["trajectory_corpus"] = str(directory / "corpus.json")
         config["trajectory_index"] = str(directory / "index.json")
@@ -139,7 +141,8 @@ def resolved_config(root: Path, benchmark: str, condition: str) -> dict:
 
 
 def run_condition(root: Path, benchmark: str, condition: str, smoke: bool) -> dict:
-    checks = preflight(root, benchmark, require_gpu=True)
+    checks = preflight(root, benchmark, require_gpu=True,
+                       require_training=condition in {"expel_retrieval_only_v1", "m2_trajectory_v1"})
     if condition != "baseline" and not checks["frozen_baseline_compatible"]:
         print("Frozen baseline incompatible on this cluster; run a new cluster baseline before comparison:",
               checks["frozen_baseline_mismatches"], flush=True)
@@ -169,7 +172,29 @@ def latest_pilot(root: Path, benchmark: str, condition: str) -> Path:
     return max(candidates, key=lambda path: path.name)
 
 
-def compare_pilots(root: Path, benchmark: str, baseline_dir: str | Path | None = None) -> dict:
+def compare_pilots(root: Path, benchmark: str, baseline_dir: str | Path | None = None,
+                   left_dir: str | Path | None = None, right_dir: str | Path | None = None) -> dict:
+    if (left_dir is None) != (right_dir is None):
+        raise ValueError("Provide both --left-run and --right-run")
+    if left_dir is not None:
+        if baseline_dir is not None:
+            raise ValueError("Use either --baseline-run or an explicit run pair")
+        report = compare_trajectory(left_dir, right_dir)
+        if report["benchmark"] != benchmark:
+            raise ValueError("Comparison benchmark differs from --benchmark")
+        output = root / "comparisons"
+        output.mkdir(exist_ok=True)
+        destination = output / (f"{benchmark}_{report['left']['condition']}_vs_"
+                                f"{report['right']['condition']}_{report['left']['run_id']}_"
+                                f"{report['right']['run_id']}.json")
+        if destination.exists() and read_json(destination) != report:
+            raise FileExistsError(f"Existing comparison differs: {destination}")
+        if not destination.exists():
+            write_json_atomic(destination, report)
+        return {"left_successes": report["left"]["successes"],
+                "right_successes": report["right"]["successes"],
+                "helped": report["paired"]["helped"], "hurt": report["paired"]["hurt"],
+                "file": str(destination)}
     baseline = Path(baseline_dir) if baseline_dir else frozen_baseline(root, benchmark)
     retrieval = latest_pilot(root, benchmark, "expel_retrieval_only_v1")
     m2 = latest_pilot(root, benchmark, "m2_trajectory_v1")
@@ -198,6 +223,8 @@ def main() -> None:
     parser.add_argument("--benchmark", choices=("alfworld", "textcraft"), required=True)
     parser.add_argument("--condition", choices=tuple(CONDITION_CONFIGS))
     parser.add_argument("--baseline-run", help="Full cluster baseline directory when frozen baseline versions differ")
+    parser.add_argument("--left-run", help="Explicit full development run for a pair comparison")
+    parser.add_argument("--right-run", help="Explicit full development run for a pair comparison")
     args = parser.parse_args()
     if not args.data_root:
         parser.error("Set AGENT_SUPPORT_DATA or pass --data-root")
@@ -211,7 +238,7 @@ def main() -> None:
     elif args.stage in {"smoke", "pilot"}:
         result = run_condition(root, args.benchmark, args.condition, args.stage == "smoke")
     else:
-        result = compare_pilots(root, args.benchmark, args.baseline_run)
+        result = compare_pilots(root, args.benchmark, args.baseline_run, args.left_run, args.right_run)
     print(json.dumps(result, indent=2), flush=True)
 
 

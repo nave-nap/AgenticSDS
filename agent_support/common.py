@@ -70,7 +70,7 @@ TRAJECTORY_CONDITIONS = {"expel_retrieval_only_v1", "m2_trajectory_v1"}
 
 
 def validate_config(config: dict, benchmark: str) -> None:
-    if config.get("benchmark") != benchmark or config.get("condition") not in {"baseline", "m2_always", *TRAJECTORY_CONDITIONS}:
+    if config.get("benchmark") != benchmark or config.get("condition") not in {"baseline", "m2_always", "reconsideration_only_v1", *TRAJECTORY_CONDITIONS}:
         raise ValueError("Config benchmark or condition is invalid")
     if config.get("quantization") != "nf4_4bit":
         raise ValueError("Baseline requires NF4 4-bit quantization")
@@ -82,6 +82,12 @@ def validate_config(config: dict, benchmark: str) -> None:
     if "support_policy" in config and (not isinstance(config["support_policy"], str)
                                        or not config["support_policy"]):
         raise ValueError("support_policy must be a nonempty policy ID")
+    if config["condition"] == "reconsideration_only_v1" and any(
+        key in config for key in ("memory_corpus", "memory_index", "memory_top_k",
+                              "trajectory_corpus", "trajectory_index", "trajectory_top_k",
+                              "trajectory_token_budget")
+    ):
+        raise ValueError("Reconsideration-only cannot configure memory or retrieval")
     if config["condition"] == "m2_always" or any(key in config for key in
                                                  ("memory_corpus", "memory_index", "memory_top_k")):
         if not all(isinstance(config.get(key), str) and config[key] for key in ("memory_corpus", "memory_index")):

@@ -1,0 +1,13 @@
+{
+  "alfworld_config": "/content/alfworld_config.yaml",
+  "benchmark": "alfworld",
+  "condition": "reconsideration_only_v1",
+  "support_policy": "fixed_by_condition_v1",
+  "history_window": 8,
+  "max_actions": 30,
+  "max_decisions": 30,
+  "max_new_tokens": 32,
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "quantization": "nf4_4bit",
+  "seed": 42
+}

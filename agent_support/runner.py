@@ -17,7 +17,8 @@ from .common import TRAJECTORY_CONDITIONS, canonical_digest, read_json, validate
 from .model import QwenModel
 from .policy import alfworld_messages, parse_alfworld, parse_textcraft, textcraft_messages
 from .memory import ActionMemory, RETRIEVAL_POLICY, SentenceEmbedder, support_messages
-from .support_policy import (ACTION_TRAJECTORY, LEGACY_ACTION_MEMORY, TASK_TRAJECTORY,
+from .reconsideration import reconsideration_messages
+from .support_policy import (ACTION_TRAJECTORY, LEGACY_ACTION_MEMORY, RECONSIDERATION, TASK_TRAJECTORY,
                              SupportPolicy, TurnContext, make_support_policy, selected_supports)
 from .trajectory_memory import MPNetEmbedder, POLICY as TRAJECTORY_POLICY, TrajectoryMemory, memory_messages
 
@@ -165,6 +166,15 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                              "proposed_action": proposed_action, "retrieved": hits, "action_changed": False}
                     revision_messages = memory_messages(messages, hits, proposed_action) if hits else None
                     fallback_reason = "no_trajectory_within_budget"
+                elif choice == RECONSIDERATION:
+                    retrieval_time = 0.0
+                    event = {"mechanism": "reconsideration_only_v1", "support_id": RECONSIDERATION,
+                             "selection_policy": None,
+                             "retrieval_seconds": 0.0, "retrieval_event": False,
+                             "retrieval_performed": False, "retrieved": [],
+                             "proposed_action": proposed_action, "action_changed": False}
+                    revision_messages = reconsideration_messages(messages, proposed_action, benchmark)
+                    fallback_reason = ""
                 else:
                     raise ValueError(f"Unknown support selected: {choice}")
                 support_calls += 1
@@ -257,7 +267,7 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
         "elapsed_seconds": round(time.perf_counter() - started, 3),
         "trace": trace,
     }
-    if support is not None or trajectory_support is not None:
+    if condition != "baseline" or support is not None or trajectory_support is not None or support_calls:
         result.update({"model_calls": len(trace) + support_model_calls,
                        "support_calls": support_calls, "support_model_calls": support_model_calls,
                        "support_input_tokens": support_input_tokens, "support_output_tokens": support_output_tokens,

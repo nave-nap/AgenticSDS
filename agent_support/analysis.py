@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from .common import canonical_digest, read_json, write_json_atomic
+from .support_policy import RECONSIDERATION
 
 
 def load_run(directory: str | Path) -> tuple[dict, dict, dict, dict[str, dict]]:
@@ -210,13 +211,14 @@ def compare_support(baseline_dir: str | Path, supported_dir: str | Path) -> dict
 
 
 def compare_trajectory(left_dir: str | Path, right_dir: str | Path) -> dict:
-    """Pair baseline, ExpeL retrieval-only, or action-conditioned trajectory runs."""
+    """Pair full development runs across the trajectory and no-retrieval controls."""
     left_meta, left_config, left_manifest, left_results = load_run(left_dir)
     right_meta, right_config, right_manifest, right_results = load_run(right_dir)
-    conditions = {"baseline", "expel_retrieval_only_v1", "m2_trajectory_v1"}
+    trajectory_conditions = {"expel_retrieval_only_v1", "m2_trajectory_v1"}
+    conditions = {"baseline", "reconsideration_only_v1", *trajectory_conditions}
     left_condition, right_condition = left_config.get("condition"), right_config.get("condition")
     if left_condition not in conditions or right_condition not in conditions or left_condition == right_condition:
-        raise ValueError("Expected two distinct baseline/trajectory conditions")
+        raise ValueError("Expected two distinct supported conditions")
     if (left_meta.get("condition") != left_condition or right_meta.get("condition") != right_condition):
         raise ValueError("Run metadata condition differs from config")
     if left_meta["benchmark"] != right_meta["benchmark"] or left_manifest != right_manifest:
@@ -242,7 +244,28 @@ def compare_trajectory(left_dir: str | Path, right_dir: str | Path) -> dict:
         if left_meta.get(field) != right_meta.get(field):
             raise ValueError(f"Run metadata differs: {field}")
     trajectory_runs = [(meta, config) for meta, config in ((left_meta, left_config), (right_meta, right_config))
-                       if config["condition"] != "baseline"]
+                       if config["condition"] in trajectory_conditions]
+    for meta, config in ((left_meta, left_config), (right_meta, right_config)):
+        if config["condition"] == "reconsideration_only_v1":
+            if any(key in config for key in ("memory_corpus", "memory_index", "memory_top_k",
+                                              "trajectory_corpus", "trajectory_index", "trajectory_top_k",
+                                              "trajectory_token_budget")) or any(
+                key in meta for key in ("memory_corpus_sha256", "memory_index_sha256",
+                                         "trajectory_corpus_sha256", "trajectory_index_sha256",
+                                         "memory_selection_policy", "legacy_memory_selection_policy",
+                                         "trajectory_memory_selection_policy")
+            ):
+                raise ValueError("Reconsideration-only run contains memory provenance")
+            if not meta.get("support_policy_id"):
+                raise ValueError("Reconsideration-only run lacks support policy ID")
+            for episode in (left_results if meta is left_meta else right_results).values():
+                for step in episode["trace"]:
+                    for event in step.get("support_events", [step["support"]] if "support" in step else []):
+                        if (event.get("mechanism") != "reconsideration_only_v1"
+                                or event.get("support_id") != RECONSIDERATION
+                                or event.get("retrieval_performed") is not False
+                                or event.get("retrieval_event") is not False or event.get("retrieved")):
+                            raise ValueError("Reconsideration-only run contains a retrieval or unexpected support event")
     for meta, config in trajectory_runs:
         if not all(meta.get(key) for key in ("trajectory_corpus_sha256", "trajectory_index_sha256",
                                               "memory_selection_policy")):
@@ -280,6 +303,11 @@ def compare_trajectory(left_dir: str | Path, right_dir: str | Path) -> dict:
                 "inference_seconds": round(sum(item["inference_seconds"] for item in episodes), 3),
                 "failed_actions": sum(item["failed_actions"] for item in episodes),
                 "parser_errors": sum(item["parser_errors"] for item in episodes),
+                "support_calls": sum(item.get("support_calls", 0) for item in episodes),
+                "support_input_tokens": sum(item.get("support_input_tokens", 0) for item in episodes),
+                "support_output_tokens": sum(item.get("support_output_tokens", 0) for item in episodes),
+                "support_parse_errors": sum(item.get("support_parse_errors", 0) for item in episodes),
+                "retrieval_seconds": round(sum(item.get("retrieval_seconds", 0) for item in episodes), 3),
                 "retrieval_events": len(retrieval_events),
                 "retrieval_hits": sum(bool(event.get("retrieved")) for event in retrieval_events),
                 "support_model_calls": sum(item.get("support_model_calls", 0) for item in episodes),
@@ -302,6 +330,7 @@ def compare_trajectory(left_dir: str | Path, right_dir: str | Path) -> dict:
                                            - left_episode["input_tokens"] - left_episode["output_tokens"]})
     return {"schema_version": 1, "benchmark": left_meta["benchmark"],
             "manifest_sha256": left_meta["selected_manifest_sha256"],
+            "different_git_commits": left_meta.get("git_commit") != right_meta.get("git_commit"),
             "left": {"condition": left_condition, "run_id": left_meta["run_id"],
                      "git_commit": left_meta.get("git_commit"),
                      "support_policy_id": left_meta.get("support_policy_id"), **left_totals},
@@ -329,7 +358,7 @@ def main() -> None:
     parser.add_argument("left_run")
     parser.add_argument("right_run")
     parser.add_argument("--support-comparison", action="store_true", help="Compare a full baseline run with a full M2 development run")
-    parser.add_argument("--trajectory-comparison", action="store_true", help="Compare full baseline or trajectory-memory development runs")
+    parser.add_argument("--trajectory-comparison", action="store_true", help="Compare full baseline, trajectory-memory, or reconsideration development runs")
     parser.add_argument("--output", help="Write the comparison JSON to this path")
     args = parser.parse_args()
     if args.support_comparison and args.trajectory_comparison:

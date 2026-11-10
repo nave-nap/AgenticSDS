@@ -15,7 +15,8 @@ Phase = Literal["before_proposal", "after_proposal"]
 TASK_TRAJECTORY = "task_trajectory_examples"
 ACTION_TRAJECTORY = "action_trajectory_reconsideration"
 LEGACY_ACTION_MEMORY = "legacy_action_memory_reconsideration"
-KNOWN_SUPPORTS = {TASK_TRAJECTORY, ACTION_TRAJECTORY, LEGACY_ACTION_MEMORY}
+RECONSIDERATION = "proposal_reconsideration_without_retrieval"
+KNOWN_SUPPORTS = {TASK_TRAJECTORY, ACTION_TRAJECTORY, LEGACY_ACTION_MEMORY, RECONSIDERATION}
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,8 @@ class FixedConditionPolicy:
                 return (ACTION_TRAJECTORY,)
             if context.condition == "m2_always":
                 return (LEGACY_ACTION_MEMORY,)
+            if context.condition == "reconsideration_only_v1":
+                return (RECONSIDERATION,)
         return ()
 
 
@@ -77,7 +80,7 @@ def selected_supports(policy: SupportPolicy, context: TurnContext) -> tuple[str,
     if len(choices) != len(set(choices)):
         raise ValueError("Support policy selected a support more than once in one phase")
     allowed = ({TASK_TRAJECTORY} if context.phase == "before_proposal"
-               else {ACTION_TRAJECTORY, LEGACY_ACTION_MEMORY})
+               else {ACTION_TRAJECTORY, LEGACY_ACTION_MEMORY, RECONSIDERATION})
     if any(choice not in allowed for choice in choices):
         raise ValueError(f"Support policy selected a support in the wrong phase: {choices}")
     if context.phase == "after_proposal" and context.proposed_action is None and choices:

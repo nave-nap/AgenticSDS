@@ -2,6 +2,8 @@
 
 The cluster workflow uses the same Python runner as Colab. Evan's account is on Penn's Locust cluster at `locust-login.seas.upenn.edu`. SSH uses the PennKey username `evanpan`, password, and two-factor authentication. Off campus, connect to the [Penn VPN](https://hpc.engineering.upenn.edu/using-penn-vpn-to-access-resources/) first. The Slurm partition, account, Python module, and GPU model must be checked from the account's allocation. Slurm's [official `sbatch` documentation](https://slurm.schedmd.com/sbatch.html) describes the resource flags used here.
 
+**Current Locust environment:** Python 3.12 and a working CUDA-compatible PyTorch build are already installed. Keep that environment for the new reconsideration experiment. Do not rerun `scripts/locust_install.sh` or replace PyTorch with a CUDA 13.x build. The older install instructions below are for a fresh setup only. `scripts/locust_job.sh` resolves the repository from `SLURM_SUBMIT_DIR` when Slurm copies the script to its spool directory; submit jobs from the repository root.
+
 The retrieval-only and M2 configs pin the [per-turn support policy](support_policy.md) `fixed_by_condition_v1`. It records which support calls were selected at every decision, so later policy versions can be compared without changing the retrieval mechanisms.
 
 The repository is already public on GitHub. The experiment data bundle is ignored by Git. The setup below makes its directory and the cloned working directory owner-only, so ordinary cluster users should not be able to open the data or job logs through filesystem permissions. Cluster administrators may still access files, and Slurm may show other users basic job metadata such as account name, job name, and state. Check the actual directory permissions after transfer with `ls -ld "$HOME/agent_support_data" "$HOME/AgenticSDS"`.
@@ -139,3 +141,41 @@ scp -r evanpan@locust-login.seas.upenn.edu:agent_support_data/comparisons data/l
 ```
 
 If `AGENT_SUPPORT_DATA` is on `/shared_data0/`, substitute its actual absolute path in the remote side of those commands. Keep the cluster copies until you have verified the download; then remove only copies you no longer need. The frozen input bundle on your computer and in Drive remains the original source.
+
+## Reconsideration-only control (D)
+
+`reconsideration_only_v1` makes the unchanged baseline proposal, then asks the same Qwen model to reconsider once after each valid proposal. The second prompt contains the current task, observations, recent history, available actions or recipes, and the proposal. It contains no retrieved examples. D neither reads nor builds a trajectory corpus or index. It uses the same model settings, manifest, and action budgets as M2; its possible second-call schedule matches M2, while actual token counts can differ. Episode traces mark each D support event with `retrieval_performed: false`, and report support calls, support model calls, tokens, parse errors, action changes, and inference time.
+
+On Locust, from the repository root with the existing Python 3.12 environment active, set your existing data path and GPU partition. The script uses `.venv/bin/python` by default; set `VENV_PATH` to the working environment directory if it is elsewhere. Export these variables in the same shell that calls `sbatch`:
+
+```bash
+cd "$HOME/AgenticSDS"
+export AGENT_SUPPORT_DATA="$HOME/agent_support_data"
+export ALFWORLD_DATA="$AGENT_SUPPORT_DATA/alfworld"
+export HF_HOME="$AGENT_SUPPORT_DATA/hf_cache"
+export VENV_PATH="$PWD/.venv"
+GPU_PARTITION='YOUR_GPU_PARTITION'
+sbatch --partition="$GPU_PARTITION" --gpus=1 --cpus-per-task=4 --mem=32G --time=01:00:00 \
+  scripts/locust_job.sh smoke --benchmark textcraft --condition reconsideration_only_v1
+```
+
+Inspect the new `run.json`, `summary.json`, and three episode traces under `$AGENT_SUPPORT_DATA/results/`. Then submit the full 20-task development run. ALFWorld uses the same commands with `--benchmark alfworld`; it does not require memory either.
+
+```bash
+sbatch --partition="$GPU_PARTITION" --gpus=1 --cpus-per-task=4 --mem=32G --time=04:00:00 \
+  scripts/locust_job.sh pilot --benchmark textcraft --condition reconsideration_only_v1
+```
+
+Compare full runs by their exact directory paths. `--left-run` and `--right-run` allow an earlier Git commit for A or C and write the paired report to `$AGENT_SUPPORT_DATA/comparisons/`. Substitute your actual run directory names; the comparator rejects smoke runs, differing task manifests, shared agent settings, package or Python versions, and benchmark snapshots.
+
+```bash
+export PYTHONHASHSEED=0
+.venv/bin/python -m agent_support.cluster_workflow compare --benchmark textcraft \
+  --left-run "$AGENT_SUPPORT_DATA/results/EXACT_BASELINE_RUN_DIR" \
+  --right-run "$AGENT_SUPPORT_DATA/results/EXACT_D_RUN_DIR"
+.venv/bin/python -m agent_support.cluster_workflow compare --benchmark textcraft \
+  --left-run "$AGENT_SUPPORT_DATA/results/EXACT_M2_RUN_DIR" \
+  --right-run "$AGENT_SUPPORT_DATA/results/EXACT_D_RUN_DIR"
+```
+
+Use the full cluster baseline for A if the frozen Colab baseline has a different Python or package version. Git commit IDs may differ between older M2 and D runs: the report records both, and the comparator accepts them when the saved configurations and environment checks match. A different commit can still change runner behavior outside those snapshots, so review the commit diff before treating the comparison as a clean causal estimate. This D control tests the added reconsideration call, but does not match M2 token counts or prompt length exactly.

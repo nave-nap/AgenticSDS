@@ -4,7 +4,7 @@
 set -euo pipefail
 umask 077
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 : "${AGENT_SUPPORT_DATA:?Export AGENT_SUPPORT_DATA to the transferred data directory}"
 venv_path="${VENV_PATH:-$repo_root/.venv}"
 export PYTHONHASHSEED=0
