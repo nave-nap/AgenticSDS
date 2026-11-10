@@ -173,8 +173,8 @@ def test_run_loads_both_memories_for_a_replaceable_policy(monkeypatch, tmp_path)
             return [[1.0, 0.0] for _ in texts]
 
     monkeypatch.setitem(POLICY_REGISTRY, TwoSupports.policy_id, TwoSupports)
-    monkeypatch.setattr("agent_support.runner.SentenceEmbedder", FakeEmbedder)
-    monkeypatch.setattr("agent_support.runner.MPNetEmbedder", FakeEmbedder)
+    monkeypatch.setattr("agent_support.supports.SentenceEmbedder", FakeEmbedder)
+    monkeypatch.setattr("agent_support.supports.MPNetEmbedder", FakeEmbedder)
     observation = "Goal: craft plank."
     task = {"task_id": "textcraft:seed:42", "seed": 42, "initial_observation": observation,
             "observation_sha256": digest_text(observation)}

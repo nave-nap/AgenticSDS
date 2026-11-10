@@ -198,7 +198,7 @@ def test_runner_rejects_content_overlap_and_records_trajectory_hashes(monkeypatc
     corpus_path, index_path = tmp_path / "corpus.json", tmp_path / "index.json"
     write_json_atomic(corpus_path, corpus)
     write_json_atomic(index_path, index)
-    monkeypatch.setattr("agent_support.runner.MPNetEmbedder", lambda *_args, **_kwargs: FakeEmbedder())
+    monkeypatch.setattr("agent_support.supports.MPNetEmbedder", lambda *_args, **_kwargs: FakeEmbedder())
     config = {"benchmark": "textcraft", "condition": "expel_retrieval_only_v1", "model_id": "fake",
               "quantization": "nf4_4bit", "max_actions": 1, "max_decisions": 1,
               "history_window": 1, "max_new_tokens": 10, "trajectory_corpus": str(corpus_path),

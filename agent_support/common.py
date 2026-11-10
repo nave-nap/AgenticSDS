@@ -70,6 +70,9 @@ TRAJECTORY_CONDITIONS = {"expel_retrieval_only_v1", "m2_trajectory_v1"}
 
 
 def validate_config(config: dict, benchmark: str) -> None:
+    if config.get("schema_version") == 2:
+        validate_experiment_config(config, benchmark)
+        return
     if config.get("benchmark") != benchmark or config.get("condition") not in {"baseline", "m2_always", "reconsideration_only_v1", "adapt_dynamic_replanning_v1", *TRAJECTORY_CONDITIONS}:
         raise ValueError("Config benchmark or condition is invalid")
     if config.get("quantization") != "nf4_4bit":
@@ -123,3 +126,76 @@ def validate_config(config: dict, benchmark: str) -> None:
         for key in ("trajectory_top_k", "trajectory_token_budget"):
             if not isinstance(config.get(key), int) or config[key] <= 0:
                 raise ValueError(f"Trajectory support requires a positive {key}")
+
+
+def validate_experiment_config(config: dict, benchmark: str) -> None:
+    """Strict v2 configuration; v1 conditions retain their historical contract."""
+    from .model import MODEL_REGISTRY
+    from .support_policy import POLICY_REGISTRY
+    from .supports import SUPPORT_REGISTRY
+    from .controllers import CONTROLLER_REGISTRY
+    from .benchmarks import BENCHMARK_REGISTRY
+
+    if config.get("benchmark") != benchmark or benchmark not in BENCHMARK_REGISTRY:
+        raise ValueError("Unknown or mismatched benchmark")
+    for key in ("manifest", "output_root", "model_id", "model_revision"):
+        if not isinstance(config.get(key), str) or not config[key]:
+            raise ValueError(f"{key} is required")
+    if config.get("model_type") not in MODEL_REGISTRY:
+        raise ValueError("Unknown model type")
+    if config["model_type"] == "qwen":
+        revision = config["model_revision"]
+        if len(revision) != 40 or any(char not in "0123456789abcdef" for char in revision):
+            raise ValueError("Qwen model_revision must be an exact 40-character commit")
+        if config.get("quantization") != "nf4_4bit":
+            raise ValueError("Qwen requires NF4 4-bit quantization")
+    for key in ("max_actions", "max_model_calls", "max_decisions", "history_window", "max_new_tokens"):
+        if type(config.get(key)) is not int or config[key] <= 0:
+            raise ValueError(f"{key} must be a positive integer")
+    for key in ("seed", "max_support_calls", "max_support_tokens"):
+        if type(config.get(key)) is not int or config[key] < 0:
+            raise ValueError(f"{key} must be a nonnegative integer")
+    supports = config.get("supports")
+    if not isinstance(supports, list) or len(supports) != len(set(supports)) or any(
+            item not in SUPPORT_REGISTRY for item in supports):
+        raise ValueError("supports must be a list of distinct registered IDs")
+    versions = config.get("support_versions")
+    if not isinstance(versions, dict) or set(versions) != set(supports) or any(
+            not isinstance(version, str) or not version for version in versions.values()):
+        raise ValueError("support_versions must pin every configured support")
+    if any(item in supports for item in ("task_trajectory_examples", "action_trajectory_reconsideration")):
+        for key in ("trajectory_corpus", "trajectory_index"):
+            if not isinstance(config.get(key), str) or not config[key]:
+                raise ValueError(f"Trajectory support requires {key}")
+        for key in ("trajectory_top_k", "trajectory_token_budget"):
+            if type(config.get(key)) is not int or config[key] <= 0:
+                raise ValueError(f"Trajectory support requires positive {key}")
+    if "legacy_action_memory_reconsideration" in supports:
+        for key in ("memory_corpus", "memory_index"):
+            if not isinstance(config.get(key), str) or not config[key]:
+                raise ValueError(f"Legacy M2 requires {key}")
+        if type(config.get("memory_top_k")) is not int or config["memory_top_k"] <= 0:
+            raise ValueError("Legacy M2 requires positive memory_top_k")
+    policy = config.get("selection_policy")
+    if not isinstance(policy, dict) or policy.get("id") not in POLICY_REGISTRY:
+        raise ValueError("selection_policy must name a registered policy")
+    if policy["id"] in {"always_v1", "random_v1", "failure_triggered_v1"}:
+        if policy.get("support_id") not in supports or policy["support_id"] == "none":
+            raise ValueError("Policy support_id must name an available support")
+    if policy["id"] == "random_v1":
+        if type(policy.get("probability")) not in (float, int) or not 0 <= policy["probability"] <= 1:
+            raise ValueError("Random policy probability must be in [0, 1]")
+        if type(policy.get("seed")) is not int:
+            raise ValueError("Random policy seed must be an integer")
+    if policy["id"] == "failure_triggered_v1":
+        if type(policy.get("threshold")) is not int or policy["threshold"] <= 0:
+            raise ValueError("Failure threshold must be positive")
+        if type(policy.get("cooldown")) is not int or policy["cooldown"] < 0:
+            raise ValueError("Failure cooldown must be nonnegative")
+    controller = config.get("controller")
+    if controller is not None and controller not in CONTROLLER_REGISTRY:
+        raise ValueError("Unknown controller")
+    if controller == "adapt_dynamic_replanning_v1" and benchmark != "textcraft":
+        raise ValueError("ADaPT supports TextCraft only")
+    if config.get("condition") != "modular_v1" and controller is None:
+        raise ValueError("v2 condition must be modular_v1")

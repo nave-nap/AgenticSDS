@@ -10,6 +10,7 @@ from typing import Callable
 from .common import digest_text
 from .manifests import alfworld_data_root, load_alfworld_config, textcraft_environment
 from .textworld_compat import install_if_needed
+from .policy import alfworld_messages, parse_alfworld, parse_textcraft, textcraft_messages
 
 
 class TextCraftEpisode:
@@ -125,10 +126,57 @@ BENCHMARK_REGISTRY: dict[str, Callable[[dict, dict], object]] = {
 }
 
 
-def register_benchmark(benchmark_id: str, factory: Callable[[dict, dict], object]) -> None:
+class TextCraftDriver:
+    def prompt(self, episode, history: list[dict], window: int):
+        return None, textcraft_messages(episode.initial_observation, history, window)
+
+    def parse(self, raw: str, available):
+        return parse_textcraft(raw)
+
+    def stop_reason(self, episode, history: list[dict]) -> str | None:
+        return None
+
+    def parse_error_ends_episode(self) -> bool:
+        return False
+
+
+class ALFWorldDriver:
+    def prompt(self, episode, history: list[dict], window: int):
+        available = list(episode.actions)
+        return available, alfworld_messages(episode.task_prompt, episode.observation, available, history, window)
+
+    def parse(self, raw: str, available):
+        return parse_alfworld(raw, available)
+
+    def stop_reason(self, episode, history: list[dict]) -> str | None:
+        if not episode.actions:
+            return "no_actions"
+        if len(history) >= 6:
+            recent = [item["action"] for item in history[-6:]]
+            if recent[:2] == recent[2:4] == recent[4:6]:
+                return "repeated_action_loop"
+        return None
+
+    def parse_error_ends_episode(self) -> bool:
+        return True
+
+
+BENCHMARK_DRIVERS = {"textcraft": TextCraftDriver(), "alfworld": ALFWorldDriver()}
+
+
+def register_benchmark(benchmark_id: str, factory: Callable[[dict, dict], object], driver=None) -> None:
     if not benchmark_id or benchmark_id in BENCHMARK_REGISTRY:
         raise ValueError(f"Benchmark is empty or already registered: {benchmark_id}")
     BENCHMARK_REGISTRY[benchmark_id] = factory
+    if driver is not None:
+        BENCHMARK_DRIVERS[benchmark_id] = driver
+
+
+def benchmark_driver(benchmark_id: str):
+    try:
+        return BENCHMARK_DRIVERS[benchmark_id]
+    except KeyError as exc:
+        raise ValueError(f"Benchmark has no prompt/parser driver: {benchmark_id}") from exc
 
 
 def make_episode(benchmark: str, task: dict, config: dict):

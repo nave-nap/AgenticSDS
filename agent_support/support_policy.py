@@ -7,7 +7,9 @@ without changing the support implementations or the base agent prompts.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
+import hashlib
+import random
 from typing import Literal, Protocol
 
 
@@ -35,12 +37,31 @@ class TurnContext:
     support_calls_so_far: int
     proposed_action: str | None = None
     proposal_output: str | None = None
+    available_supports: tuple[str, ...] = ()
+    remaining_model_calls: int | None = None
+    remaining_support_calls: int | None = None
+    remaining_support_tokens: int | None = None
+    recent_failures: tuple[bool, ...] = ()
+
+
+@dataclass(frozen=True)
+class SelectionDecision:
+    support_ids: tuple[str, ...] = ()
+    reason: str = ""
+    trigger: str | None = None
+    budget: dict = field(default_factory=dict)
+    cooldown_remaining: int = 0
+
+    def as_dict(self) -> dict:
+        return {"invoke": bool(self.support_ids), "support_ids": list(self.support_ids),
+                "reason": self.reason, "trigger": self.trigger,
+                "budget": self.budget, "cooldown_remaining": self.cooldown_remaining}
 
 
 class SupportPolicy(Protocol):
     policy_id: str
 
-    def select(self, context: TurnContext) -> tuple[str, ...]:
+    def select(self, context: TurnContext) -> tuple[str, ...] | SelectionDecision:
         """Return support IDs to execute, in order, at this phase of the turn."""
 
 
@@ -65,24 +86,113 @@ class FixedConditionPolicy:
 POLICY_REGISTRY = {FixedConditionPolicy.policy_id: FixedConditionPolicy}
 
 
-def make_support_policy(config: dict) -> SupportPolicy:
-    policy_id = config.get("support_policy", FixedConditionPolicy.policy_id)
+class NeverPolicy:
+    policy_id = "never_v1"
+
+    def __init__(self, spec: dict | None = None, task_id: str = ""):
+        pass
+
+    def select(self, context: TurnContext) -> SelectionDecision:
+        return SelectionDecision(reason="never")
+
+
+class AlwaysPolicy:
+    policy_id = "always_v1"
+
+    def __init__(self, spec: dict, task_id: str = ""):
+        self.support_id = spec["support_id"]
+
+    def select(self, context: TurnContext) -> SelectionDecision:
+        if context.phase != "after_proposal" or context.proposed_action is None:
+            return SelectionDecision(reason="ineligible_phase_or_proposal")
+        return SelectionDecision((self.support_id,), "always", "configured_always")
+
+
+class RandomPolicy:
+    policy_id = "random_v1"
+
+    def __init__(self, spec: dict, task_id: str = ""):
+        self.support_id = spec["support_id"]
+        self.probability = spec["probability"]
+        seed = f"{spec['seed']}\0{task_id}\0{self.policy_id}".encode()
+        self.rng = random.Random(int.from_bytes(hashlib.sha256(seed).digest(), "big"))
+
+    def select(self, context: TurnContext) -> SelectionDecision:
+        if context.phase != "after_proposal" or context.proposed_action is None:
+            return SelectionDecision(reason="ineligible_phase_or_proposal")
+        chosen = self.rng.random() < self.probability
+        return SelectionDecision((self.support_id,) if chosen else (),
+                                 "random_draw_selected" if chosen else "random_draw_skipped",
+                                 "seeded_probability")
+
+
+class FailureTriggeredPolicy:
+    policy_id = "failure_triggered_v1"
+
+    def __init__(self, spec: dict, task_id: str = ""):
+        self.support_id = spec["support_id"]
+        self.threshold = spec["threshold"]
+        self.cooldown = spec["cooldown"]
+        self.last_selected_decision = -10**9
+
+    def select(self, context: TurnContext) -> SelectionDecision:
+        if context.phase != "after_proposal" or context.proposed_action is None:
+            return SelectionDecision(reason="ineligible_phase_or_proposal")
+        remaining = max(0, self.cooldown - (context.decision - self.last_selected_decision - 1))
+        if remaining:
+            return SelectionDecision(reason="cooldown", cooldown_remaining=remaining)
+        failures = 0
+        for failed in reversed(context.recent_failures):
+            if not failed:
+                break
+            failures += 1
+        if failures < self.threshold:
+            return SelectionDecision(reason="failure_threshold_not_met", trigger="consecutive_failed_actions")
+        return SelectionDecision((self.support_id,), "failure_threshold_met", "consecutive_failed_actions")
+
+    def on_executed(self, decision: int) -> None:
+        self.last_selected_decision = decision
+
+
+POLICY_REGISTRY.update({policy.policy_id: policy for policy in
+                        (NeverPolicy, AlwaysPolicy, RandomPolicy, FailureTriggeredPolicy)})
+
+
+def make_support_policy(config: dict, task_id: str = "") -> SupportPolicy:
+    spec = config.get("selection_policy")
+    policy_id = spec["id"] if spec else config.get("support_policy", FixedConditionPolicy.policy_id)
     try:
-        return POLICY_REGISTRY[policy_id]()
+        factory = POLICY_REGISTRY[policy_id]
+        return factory(spec, task_id) if spec else factory()
     except KeyError as exc:
         raise ValueError(f"Unknown support policy: {policy_id}") from exc
 
 
 def selected_supports(policy: SupportPolicy, context: TurnContext) -> tuple[str, ...]:
-    choices = policy.select(context)
-    if not isinstance(choices, tuple) or any(choice not in KNOWN_SUPPORTS for choice in choices):
+    return selection_decision(policy, context).support_ids
+
+
+def selection_decision(policy: SupportPolicy, context: TurnContext) -> SelectionDecision:
+    selection = policy.select(context)
+    decision = selection if isinstance(selection, SelectionDecision) else SelectionDecision(selection, "fixed_condition")
+    choices = decision.support_ids
+    from .supports import SUPPORT_REGISTRY
+    if not isinstance(choices, tuple) or any(choice not in SUPPORT_REGISTRY for choice in choices):
         raise ValueError("Support policy returned an unknown support or a non-tuple selection")
     if len(choices) != len(set(choices)):
         raise ValueError("Support policy selected a support more than once in one phase")
     allowed = ({TASK_TRAJECTORY} if context.phase == "before_proposal"
-               else {ACTION_TRAJECTORY, LEGACY_ACTION_MEMORY, RECONSIDERATION})
+               else {ACTION_TRAJECTORY, LEGACY_ACTION_MEMORY, RECONSIDERATION, "none"})
+    allowed = allowed | (set(context.available_supports) - KNOWN_SUPPORTS)
     if any(choice not in allowed for choice in choices):
         raise ValueError(f"Support policy selected a support in the wrong phase: {choices}")
     if context.phase == "after_proposal" and context.proposed_action is None and choices:
         raise ValueError("Support policy selected post-proposal support without a valid proposal")
-    return choices
+    if context.available_supports and any(choice not in context.available_supports for choice in choices):
+        raise ValueError(f"Support policy selected unavailable support: {choices}")
+    if not decision.budget:
+        decision = replace(decision, budget={
+            "remaining_model_calls": context.remaining_model_calls,
+            "remaining_support_calls": context.remaining_support_calls,
+            "remaining_support_tokens": context.remaining_support_tokens})
+    return decision

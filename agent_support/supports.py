@@ -9,10 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from .memory import RETRIEVAL_POLICY, support_messages
+from .common import canonical_digest, read_json
+from .memory import ActionMemory, RETRIEVAL_POLICY, SentenceEmbedder, support_messages
 from .reconsideration import reconsideration_messages
 from .support_policy import ACTION_TRAJECTORY, LEGACY_ACTION_MEMORY, RECONSIDERATION, TASK_TRAJECTORY, TurnContext
-from .trajectory_memory import POLICY as TRAJECTORY_POLICY, memory_messages
+from .trajectory_memory import MPNetEmbedder, POLICY as TRAJECTORY_POLICY, TrajectoryMemory, memory_messages
 
 
 @dataclass
@@ -57,7 +58,53 @@ def make_supports(config: dict, model, resources: dict) -> dict[str, SupportAdap
             result[support_id] = SUPPORT_REGISTRY[support_id](config, model, resources)
         except KeyError as exc:
             raise ValueError(f"Unknown support: {support_id}") from exc
+        pinned = config.get("support_versions", {}).get(support_id)
+        if pinned is not None and result[support_id].version != pinned:
+            raise ValueError(f"Support version mismatch: {support_id}")
     return result
+
+
+def load_builtin_artifacts(config: dict, manifest: dict, selected: list[dict]) -> dict:
+    """Load and audit the historical memory formats before starting a run."""
+    artifacts = {}
+    selected_ids = {task["task_id"] for task in selected}
+    for kind, corpus_key, index_key in (("legacy", "memory_corpus", "memory_index"),
+                                         ("trajectory", "trajectory_corpus", "trajectory_index")):
+        if corpus_key not in config:
+            continue
+        corpus, index = read_json(config[corpus_key]), read_json(config[index_key])
+        if canonical_digest(manifest) not in corpus.get("excluded_manifest_sha256", {}).values():
+            raise ValueError("Memory corpus was not built with this evaluation manifest excluded")
+        if any(record["benchmark"] == manifest["benchmark"] and record["task_id"] in selected_ids
+               for record in corpus["records"]):
+            raise ValueError("Memory corpus contains evaluation task trajectories")
+        if kind == "trajectory":
+            fingerprint = "game_sha256" if manifest["benchmark"] == "alfworld" else "observation_sha256"
+            selected_hashes = {task[fingerprint] for task in selected}
+            if any(record["benchmark"] == manifest["benchmark"] and
+                   record["task_fingerprint"] in selected_hashes for record in corpus["records"]):
+                raise ValueError("Trajectory corpus contains evaluation task content")
+        artifacts[kind] = {"corpus": corpus, "index": index}
+    return artifacts
+
+
+def build_builtin_resources(config: dict, model, artifacts: dict) -> dict:
+    resources = {"legacy": None, "trajectory": None}
+    if "legacy" in artifacts:
+        corpus, index = artifacts["legacy"]["corpus"], artifacts["legacy"]["index"]
+        resources["legacy"] = ActionMemory(corpus, index, SentenceEmbedder(
+            index["embedding_model"], revision=index.get("embedding_revision")), config["memory_top_k"])
+    if "trajectory" in artifacts:
+        corpus, index = artifacts["trajectory"]["corpus"], artifacts["trajectory"]["index"]
+        counter = getattr(model, "count_tokens", None)
+        if counter is None:
+            tokenizer = getattr(model, "tokenizer", None)
+            counter = (lambda value: len(tokenizer.encode(value, add_special_tokens=False))
+                       if tokenizer is not None else len(value.split()))
+        resources["trajectory"] = TrajectoryMemory(corpus, index, MPNetEmbedder(
+            index["embedding_model"], revision=index.get("embedding_revision")),
+            config["trajectory_top_k"], config["trajectory_token_budget"], counter)
+    return resources
 
 
 class NoSupport:
@@ -119,6 +166,9 @@ class TaskTrajectorySupport:
         self.memory = memory
         self.hits = []
         self.retrieved = False
+
+    def expected_calls(self) -> int:
+        return 0 if self.retrieved else 1
 
     def invoke(self, context, messages, action):
         retrieval_time = 0.0

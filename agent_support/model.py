@@ -71,6 +71,10 @@ class QwenModel:
     def count_tokens(self, text: str) -> int:
         return len(self.tokenizer.encode(text, add_special_tokens=False))
 
+    def count_messages_tokens(self, messages: list[dict]) -> int:
+        return len(self.tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True))
+
     def generate(self, messages: list[dict], max_new_tokens: int | None = None) -> dict:
         input_ids = self.tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"

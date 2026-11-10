@@ -122,7 +122,7 @@ def test_alfworld_invalid_revision_executes_original_numbered_action():
 
 
 def test_run_never_loads_memory_and_cluster_config_needs_no_index(monkeypatch, tmp_path):
-    monkeypatch.setattr("agent_support.runner.MPNetEmbedder", lambda *_args, **_kw: pytest.fail("memory loaded"))
+    monkeypatch.setattr("agent_support.supports.MPNetEmbedder", lambda *_args, **_kw: pytest.fail("memory loaded"))
     monkeypatch.setattr("agent_support.runner.TrajectoryMemory", lambda *_args, **_kw: pytest.fail("memory loaded"))
     model = Model(["Action: get 1 plank", "Action: get 1 log"])
     directory = run(config(), manifest(), tmp_path / "results", model=model,

@@ -225,7 +225,7 @@ def test_supported_run_requires_exclusion_proof_and_records_memory_hashes(monkey
         def encode(self, texts):
             return [[1.0, 0.0] for _ in texts]
 
-    monkeypatch.setattr("agent_support.runner.SentenceEmbedder", FakeEmbedder)
+    monkeypatch.setattr("agent_support.supports.SentenceEmbedder", FakeEmbedder)
     index = build_index(corpus, FakeEmbedder())
     corpus_path = tmp_path / "corpus.json"
     index_path = tmp_path / "index.json"
