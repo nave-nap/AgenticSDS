@@ -169,6 +169,18 @@ def _next_line(raw: str) -> str:
     return "inventory" if line.lower() == "inventory:" else line
 
 
+def _parse_adapt_action(action: str) -> str | None:
+    """Accept TextCraft's optional craft output count used by upstream demos."""
+    parsed = parse_textcraft(action)
+    if parsed is not None:
+        return parsed
+    normalized = re.sub(r"(?<=\w)_(?=\w)", " ", action)
+    if re.fullmatch(r"craft [a-z0-9 ]+ using (?:[1-9][0-9]* [a-z0-9 ]+)(?:, [1-9][0-9]* [a-z0-9 ]+)*",
+                    normalized):
+        return normalized
+    return None
+
+
 class ADaPTController:
     """Execution-first recursive AND/OR controller with a shared TextCraft state."""
 
@@ -270,7 +282,7 @@ class ADaPTController:
                 feedback = "OK."
                 patience += 1
             else:
-                parsed = parse_textcraft(action)
+                parsed = _parse_adapt_action(action)
                 if parsed is None:
                     self.parser_errors += 1
                     record["error"] = "invalid_action_format"

@@ -7,7 +7,7 @@ import re
 import pytest
 
 from agent_support.adapt import (ADaPTController, PlanParseError, QwenExecutor, QwenPlanner,
-                                 _goal_item, _inventory_count, _next_line, parse_plan)
+                                 _goal_item, _inventory_count, _next_line, _parse_adapt_action, parse_plan)
 from agent_support import adapt_development
 from agent_support.analysis import compare_trajectory, load_run
 from agent_support.common import digest_text, validate_config
@@ -91,6 +91,9 @@ def run_controller(executor_outputs, planner_outputs=(), *, settings=None, wood=
 def test_plan_parser_nested_and_or_and_malformed():
     assert _next_line("> inventory:") == "inventory"
     assert _next_line("> get 1 wood.") == "get 1 wood"
+    assert _parse_adapt_action("craft honey bottle using 1 honey block, 4 glass bottle") == (
+        "craft honey bottle using 1 honey block, 4 glass bottle")
+    assert _parse_adapt_action("craft honey bottle using glass bottle") is None
     plan = parse_plan("Step 1: fetch 1 wood\nStep 2: craft 1 plank using 1 wood\n"
                       "Step 3: fetch 1 stone\nExecution Order: (Step 1 AND (Step 2 OR Step 3))")
     assert plan.logic == "AND"
@@ -125,6 +128,23 @@ def test_direct_success_never_calls_planner():
     assert result["environment_actions"] == result["model_calls"] == 1
     assert episode.closed and episode.actions == ["craft 1 plank using 1 wood"]
     assert not planner.calls and len(executor.calls) == 1
+
+
+def test_upstream_optional_craft_count_reaches_textcraft_episode():
+    class OptionalCountEpisode(CraftEpisode):
+        def step(self, action):
+            assert action == "craft plank using 1 wood"
+            self.actions.append(action)
+            return {"observation": "Crafted 1 minecraft:plank", "reward": 1.0,
+                    "done": True, "success": True, "failed_action": False}
+
+    episode = OptionalCountEpisode(wood=1)
+    planner = ScriptedRole()
+    result = ADaPTController(episode, config(), planner,
+                             ScriptedRole("craft plank using 1 wood")).run(episode.task)
+    assert result["success"] and result["parser_errors"] == 0
+    assert episode.actions == ["craft plank using 1 wood"]
+    assert not planner.calls
 
 
 def test_failed_direct_execution_decomposes_and_preserves_inventory():
