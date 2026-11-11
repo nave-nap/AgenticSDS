@@ -33,9 +33,9 @@ is a development-only example. It pins Qwen2.5-7B-Instruct to revision
 the [model repository API](https://huggingface.co/api/models/Qwen/Qwen2.5-7B-Instruct).
 It uses the committed 20-task development manifest, checks overlap with the
 committed held-out manifest, and selects the existing reconsideration support
-with probability 0.25. It has not been run on a GPU. Review and, if needed,
-replace the pinned revision before a new experiment; do not silently change
-it inside a frozen run.
+with probability 0.25. Three-task Locust smoke variants using this pinned
+revision have completed. Do not silently change the revision inside a frozen
+run.
 
 From the repository root, with the benchmark and CUDA dependencies installed:
 
