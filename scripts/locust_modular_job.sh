@@ -11,7 +11,7 @@ umask 077
 
 repo_root="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 venv_path="${VENV_PATH:-$repo_root/.venv}"
-result_root="$AGENT_SUPPORT_DATA/modular_results"
+result_root="${AGENT_SUPPORT_OUTPUT_ROOT:-$AGENT_SUPPORT_DATA/modular_results}"
 run_key="slurm_${SLURM_JOB_ID}"
 cd "$repo_root"
 benchmark="$("$venv_path/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["benchmark"])' "$AGENT_SUPPORT_CONFIG")"

@@ -33,3 +33,10 @@ def test_locust_wrapper_passes_limit_and_resumes_existing_run(tmp_path):
     (tmp_path / "data/modular_results/textcraft_slurm_77").mkdir(parents=True)
     subprocess.run(["bash", str(script)], env=env, check=True)
     assert arguments.read_text().splitlines()[-1] == "--resume"
+
+    isolated = tmp_path / "data/experiment1_textcraft_development"
+    env["AGENT_SUPPORT_OUTPUT_ROOT"] = str(isolated)
+    subprocess.run(["bash", str(script)], env=env, check=True)
+    isolated_args = arguments.read_text().splitlines()
+    assert isolated_args[isolated_args.index("--output-root") + 1] == str(isolated)
+    assert "--resume" not in isolated_args

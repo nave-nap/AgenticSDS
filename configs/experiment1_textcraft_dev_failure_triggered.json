@@ -1,0 +1,36 @@
+{
+  "schema_version": 2,
+  "benchmark": "textcraft",
+  "manifest": "manifests/textcraft/development.json",
+  "partition_manifests": {
+    "development": "manifests/textcraft/development.json",
+    "heldout": "manifests/textcraft/heldout.json"
+  },
+  "condition": "modular_v1",
+  "model_type": "qwen",
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "model_revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+  "quantization": "nf4_4bit",
+  "seed": 42,
+  "history_window": 8,
+  "max_actions": 30,
+  "max_decisions": 30,
+  "max_model_calls": 40,
+  "max_new_tokens": 100,
+  "do_sample": false,
+  "max_support_calls": 10,
+  "max_support_tokens": 20000,
+  "supports": [
+    "proposal_reconsideration_without_retrieval"
+  ],
+  "support_versions": {
+    "proposal_reconsideration_without_retrieval": "reconsideration_only_v1"
+  },
+  "selection_policy": {
+    "id": "failure_triggered_v1",
+    "support_id": "proposal_reconsideration_without_retrieval",
+    "threshold": 1,
+    "cooldown": 0
+  },
+  "output_root": "results/experiment1_textcraft_development"
+}
