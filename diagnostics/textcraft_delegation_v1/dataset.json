@@ -1,0 +1,29 @@
+{
+  "category_counts": {
+    "missing_prerequisites": 8,
+    "productive_controls": 8,
+    "repeated_failed_commands": 8,
+    "unavailable_items": 8,
+    "unproductive_or_irrelevant": 8
+  },
+  "count": 40,
+  "files_sha256": {
+    "inputs.jsonl": "ae52122f87dd8f06522bfd493ec72fdb02933b8f2e556447fbd0d0a3d1df5914",
+    "labels.jsonl": "9e142cc106c47b1fe45747e46a5f26ed29927de5e8a91ab8e744c6627627c704",
+    "replay.jsonl": "548f45807e6aa8527da472c019d95bc4e29ae08689bf08a8983890d7941fb7e6"
+  },
+  "history_window": 8,
+  "partition": "development",
+  "prompt_source_sha256": "f47316b1ca3315d6fd79c6ac56f3ca2ba2985cbdd068b942f29f13dc25f8ab83",
+  "prompt_version": "single_command_v1",
+  "schema_version": 1,
+  "selection_rule": "delegation_diagnostic_v1",
+  "selection_uses_outcome_labels": true,
+  "source_archive_sha256": "3d75c40bbaaa5e0559a6c90d96dacc5e9ba26b98638360adea447e6f4ae5b73c",
+  "source_config_sha256": "ac5f913c92159cc5b5719835f55be6a8cd98c5cae1b160d4e868b9b8d2e4919d",
+  "source_git_commit": "2cc1a41b6d55288f3fdb50fc06e92d6ac52b2d75",
+  "source_manifest_sha256": "4ec57f36416ffe7f97b004b67d107e94750fa20b889d95f580690f4dfca4900e",
+  "source_model_revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+  "source_run_id": "slurm_142829",
+  "task_count": 20
+}
