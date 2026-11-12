@@ -185,10 +185,34 @@ def validate_experiment_config(config: dict, benchmark: str) -> None:
             raise ValueError("Qwen model_revision must be an exact 40-character commit")
         if config.get("quantization") != "nf4_4bit":
             raise ValueError("Qwen requires NF4 4-bit quantization")
+    if config["model_type"] == "gpt_oss_20b":
+        revision = config["model_revision"]
+        if (config["model_id"] != "openai/gpt-oss-20b" or len(revision) != 40
+                or any(char not in "0123456789abcdef" for char in revision)):
+            raise ValueError("GPT-OSS requires its exact model ID and a pinned 40-character revision")
+        if config.get("quantization") != "mxfp4_packed":
+            raise ValueError("GPT-OSS requires packed MXFP4 quantization")
+        if config.get("reasoning_effort") not in {"low", "medium", "high"}:
+            raise ValueError("GPT-OSS reasoning_effort must be low, medium, or high")
+        if not isinstance(config.get("backend_version"), str) or not config["backend_version"]:
+            raise ValueError("GPT-OSS backend_version must be pinned")
+        import datetime
+        try:
+            if datetime.date.fromisoformat(config["prompt_date"]).isoformat() != config["prompt_date"]:
+                raise ValueError
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("GPT-OSS prompt_date must be a fixed ISO date") from exc
+        for key in ("temperature", "top_p"):
+            if type(config.get(key)) not in (int, float) or not 0 < config[key] <= 1:
+                raise ValueError(f"GPT-OSS {key} must be in (0, 1]")
+        if type(config.get("top_k")) is not int or config["top_k"] < 0:
+            raise ValueError("GPT-OSS top_k must be nonnegative")
     if type(config.get("do_sample")) is not bool:
         raise ValueError("do_sample must be explicit and Boolean")
     if config["model_type"] == "qwen" and config["do_sample"]:
         raise ValueError("The reference Qwen adapter preserves greedy decoding")
+    if config["model_type"] == "gpt_oss_20b" and not config["do_sample"]:
+        raise ValueError("GPT-OSS adapter requires sampling")
     for key in ("max_actions", "max_model_calls", "max_decisions", "history_window", "max_new_tokens"):
         if type(config.get(key)) is not int or config[key] <= 0:
             raise ValueError(f"{key} must be a positive integer")

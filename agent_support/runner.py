@@ -69,6 +69,9 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
     parser_errors = 0
     failed_actions = 0
     input_tokens = output_tokens = 0
+    reasoning_tokens = final_tokens = 0
+    generation_failures = 0
+    peak_gpu_memory_allocated_bytes = peak_gpu_memory_reserved_bytes = 0
     inference_seconds = 0.0
     support_calls = support_model_calls = support_input_tokens = support_output_tokens = support_parse_errors = 0
     model_calls = 0
@@ -144,6 +147,14 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
             model_calls += 1
             input_tokens += generation["input_tokens"]
             output_tokens += generation["output_tokens"]
+            if "reasoning_tokens" in generation:
+                reasoning_tokens += generation["reasoning_tokens"]
+                final_tokens += generation["final_tokens"]
+                generation_failures += int(generation["generation_status"] != "complete")
+                peak_gpu_memory_allocated_bytes = max(peak_gpu_memory_allocated_bytes,
+                    generation["peak_gpu_memory_allocated_bytes"])
+                peak_gpu_memory_reserved_bytes = max(peak_gpu_memory_reserved_bytes,
+                    generation["peak_gpu_memory_reserved_bytes"])
             inference_seconds += generation["inference_seconds"]
             raw = generation["text"]
             action = driver.parse(raw, available)
@@ -159,6 +170,10 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                 "output_tokens": generation["output_tokens"],
                 "inference_seconds": generation["inference_seconds"],
             }
+            for key in ("reasoning_tokens", "final_tokens", "generation_status", "generation_error",
+                        "raw_completion", "peak_gpu_memory_allocated_bytes", "peak_gpu_memory_reserved_bytes"):
+                if key in generation:
+                    record[key] = generation[key]
             if config.get("schema_version") == 2 or support is not None or trajectory_support is not None or before or after:
                 record["support_policy"] = {"policy_id": policy.policy_id,
                                             "before_proposal": list(before),
@@ -316,6 +331,11 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                                                             item.get("support_events", [item["support"]] if "support" in item else []))
                                                          for item in trace)})
     if config.get("schema_version") == 2:
+        if config.get("model_type") == "gpt_oss_20b":
+            result.update({"reasoning_tokens": reasoning_tokens, "final_tokens": final_tokens,
+                           "generation_failures": generation_failures,
+                           "peak_gpu_memory_allocated_bytes": peak_gpu_memory_allocated_bytes,
+                           "peak_gpu_memory_reserved_bytes": peak_gpu_memory_reserved_bytes})
         result["budgets"] = {"limits": {key: config[key] for key in
                                         ("max_actions", "max_decisions", "max_model_calls",
                                          "max_support_calls", "max_support_tokens")},
@@ -360,6 +380,11 @@ def summarize(episodes: list[dict]) -> dict:
         summary["blocked_support_selections"] = sum(len(step["support_policy"].get("blocked", []))
                                                      for item in episodes for step in item["trace"]
                                                      if "support_policy" in step)
+    if episodes and "reasoning_tokens" in episodes[0]:
+        for key in ("reasoning_tokens", "final_tokens", "generation_failures"):
+            summary[key] = sum(item[key] for item in episodes)
+        for key in ("peak_gpu_memory_allocated_bytes", "peak_gpu_memory_reserved_bytes"):
+            summary[key] = max(item[key] for item in episodes)
     return summary
 
 

@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "benchmark": "textcraft",
+  "manifest": "manifests/textcraft/development.json",
+  "partition_manifests": {
+    "development": "manifests/textcraft/development.json",
+    "heldout": "manifests/textcraft/heldout.json"
+  },
+  "condition": "modular_v1",
+  "model_type": "gpt_oss_20b",
+  "model_id": "openai/gpt-oss-20b",
+  "model_revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+  "quantization": "mxfp4_packed",
+  "seed": 42,
+  "history_window": 8,
+  "max_actions": 30,
+  "max_decisions": 30,
+  "max_model_calls": 30,
+  "max_new_tokens": 1024,
+  "do_sample": true,
+  "max_support_calls": 0,
+  "max_support_tokens": 0,
+  "supports": [],
+  "support_versions": {},
+  "selection_policy": {
+    "id": "never_v1"
+  },
+  "output_root": "results/standalone_models_textcraft_dev_gptoss20b",
+  "reasoning_effort": "medium",
+  "backend_version": "5.22.2",
+  "prompt_date": "2026-11-12",
+  "temperature": 1.0,
+  "top_p": 1.0,
+  "top_k": 0,
+  "component_modules": [
+    "agent_support.gpt_oss_model"
+  ]
+}
