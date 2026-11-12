@@ -7,6 +7,8 @@ import hashlib
 import random
 import time
 
+from packaging.version import Version
+
 from .model import register_model
 
 
@@ -14,6 +16,127 @@ FINAL_MARKER = "<|channel|>final<|message|>"
 ANALYSIS_MARKER = "<|channel|>analysis<|message|>"
 RETURN_TOKEN = "<|return|>"
 END_TOKEN = "<|end|>"
+
+
+def check_mxfp4_dependencies(backend_version: str, version_lookup=importlib.metadata.version) -> dict:
+    """Reject this pinned stack before Transformers can silently dequantize."""
+    try:
+        versions = {name: version_lookup(name) for name in
+                    ("transformers", "kernels", "triton", "accelerate")}
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise RuntimeError(f"GPT-OSS MXFP4 dependency missing: {exc.name}") from exc
+    if versions["transformers"] != backend_version:
+        raise RuntimeError(f"Transformers {versions['transformers']} differs from configured "
+                           f"backend_version {backend_version}")
+    if versions["kernels"] != "0.17.2":
+        raise RuntimeError(f"Transformers {backend_version} MXFP4 requires the pinned "
+                           f"kernels==0.17.2; found kernels=={versions['kernels']}")
+    if Version(versions["triton"]) < Version("3.4.0"):
+        raise RuntimeError(f"GPT-OSS MXFP4 on CUDA requires Triton >=3.4.0; "
+                           f"found {versions['triton']}")
+    return versions
+
+
+def verify_packed_mxfp4(model, torch_api, hub, expert_type, cuda_index: int = 0) -> dict:
+    """Inspect the actual Transformers 5.22.2 Triton representation on every layer."""
+    quantization = getattr(model.config, "quantization_config", None)
+    method = (quantization.get("quant_method") if isinstance(quantization, dict)
+              else getattr(quantization, "quant_method", None))
+    dequantize = (quantization.get("dequantize", False) if isinstance(quantization, dict)
+                  else getattr(quantization, "dequantize", False))
+    if method != "mxfp4" or dequantize:
+        raise RuntimeError(f"GPT-OSS MXFP4 disabled: quant_method={method!r}, dequantize={dequantize!r}")
+    if hub is None:
+        raise RuntimeError("GPT-OSS MXFP4 Triton kernel module was not loaded")
+    tensor_type = hub.tensor.Tensor
+    fp4_dtype = hub.tensor.FP4
+    layouts = hub.tensor_details.layout
+    weight_layout_type, _ = layouts.make_default_matmul_mxfp4_w_layout(mx_axis=1)
+    scale_layout_type = layouts.StridedLayout
+    expected_device = torch_api.device("cuda", cuda_index)
+    layer_count = getattr(model.config, "num_hidden_layers", None)
+    if type(layer_count) is not int or layer_count <= 0:
+        raise RuntimeError("GPT-OSS config has no positive num_hidden_layers")
+    expected = {f"model.layers.{index}.mlp.experts" for index in range(layer_count)}
+    actual = {name: module for name, module in model.named_modules()
+              if isinstance(module, expert_type)}
+    if set(actual) != expected:
+        missing = sorted(expected - set(actual))
+        extra = sorted(set(actual) - expected)
+        raise RuntimeError(f"GPT-OSS MXFP4 expert-module mismatch: missing={missing}, extra={extra}")
+
+    packed_bytes = scale_bytes = 0
+    for name in sorted(expected):
+        module = actual[name]
+        if getattr(module, "_is_hf_initialized", False) is not True:
+            raise RuntimeError(f"{name}: MXFP4 expert module is not initialized")
+        experts = getattr(module, "num_experts", None)
+        hidden = getattr(module, "hidden_size", None)
+        intermediate = getattr(module, "intermediate_size", None)
+        if any(type(value) is not int or value <= 0 for value in (experts, hidden, intermediate)):
+            raise RuntimeError(f"{name}: invalid expert dimensions")
+        for projection, logical_shape in (
+                ("gate_up_proj", (experts, hidden, intermediate * 2)),
+                ("down_proj", (experts, intermediate, hidden))):
+            location = f"{name}.{projection}"
+            if projection in getattr(module, "_parameters", {}):
+                raise RuntimeError(f"{location}: remains an nn.Parameter, not a Triton FP4 tensor")
+            weight = getattr(module, projection, None)
+            if not isinstance(weight, tensor_type):
+                raise RuntimeError(f"{location}: missing Triton packed projection")
+            if weight.dtype != fp4_dtype or tuple(weight.shape) != logical_shape:
+                raise RuntimeError(f"{location}: expected FP4 logical tensor shape {logical_shape}")
+            storage = getattr(weight, "storage", None)
+            backing = getattr(storage, "data", None)
+            if not isinstance(backing, torch_api.Tensor) or backing.dtype != torch_api.uint8:
+                raise RuntimeError(f"{location}: packed backing storage must be torch.uint8")
+            if not isinstance(getattr(storage, "layout", None), weight_layout_type):
+                raise RuntimeError(f"{location}: wrong MXFP4 weight storage layout")
+            if backing.is_meta or backing.device != expected_device or backing.numel() <= 0:
+                raise RuntimeError(f"{location}: packed backing storage is uninitialized or not on {expected_device}")
+            logical_elements = experts * logical_shape[1] * logical_shape[2]
+            if (isinstance(storage.layout, scale_layout_type)
+                    and backing.numel() * 2 != logical_elements):
+                raise RuntimeError(f"{location}: packed backing storage has the wrong byte count")
+            if backing.numel() * 2 < logical_elements:
+                raise RuntimeError(f"{location}: packed backing storage is incomplete")
+
+            precision = getattr(module, f"{projection}_precision_config", None)
+            scale = getattr(precision, "weight_scale", None)
+            if not isinstance(scale, tensor_type):
+                raise RuntimeError(f"{location}: missing MXFP4 scale tensor")
+            expected_scale_shape = (experts, logical_shape[1] // 32, logical_shape[2])
+            if logical_shape[1] % 32 or tuple(scale.shape) != expected_scale_shape:
+                raise RuntimeError(f"{location}: wrong MXFP4 scale shape; expected {expected_scale_shape}")
+            scale_storage = getattr(scale, "storage", None)
+            scale_backing = getattr(scale_storage, "data", None)
+            if (scale.dtype != torch_api.uint8 or not isinstance(scale_backing, torch_api.Tensor)
+                    or scale_backing.dtype != torch_api.uint8):
+                raise RuntimeError(f"{location}: MXFP4 scale storage must be torch.uint8")
+            if not isinstance(getattr(scale_storage, "layout", None), scale_layout_type):
+                raise RuntimeError(f"{location}: wrong MXFP4 scale storage layout")
+            if (scale_backing.is_meta or scale_backing.device != expected_device
+                    or scale_backing.numel() != logical_elements // 32):
+                raise RuntimeError(f"{location}: scale storage is uninitialized, incomplete, or not on {expected_device}")
+            packed_bytes += backing.numel() * backing.element_size()
+            scale_bytes += scale_backing.numel() * scale_backing.element_size()
+
+    parameters = list(model.named_parameters())
+    if not parameters:
+        raise RuntimeError("GPT-OSS has no ordinary model parameters")
+    for name, parameter in parameters:
+        if parameter.is_meta or parameter.device != expected_device:
+            raise RuntimeError(f"{name}: ordinary model parameter is uninitialized or not on {expected_device}")
+    return {"quantization_method": "mxfp4", "verified_expert_modules": len(expected),
+            "verified_packed_projections": len(expected) * 2,
+            "representation_type": f"{tensor_type.__module__}.{tensor_type.__qualname__}",
+            "weight_layout_type": weight_layout_type.__name__,
+            "scale_layout_type": scale_layout_type.__name__,
+            "weight_storage_dtype": str(torch_api.uint8),
+            "scale_storage_dtype": str(torch_api.uint8),
+            "backing_storage_device": str(expected_device),
+            "packed_weight_storage_bytes": packed_bytes,
+            "scale_storage_bytes": scale_bytes}
 
 
 def _positions(tokens: list[int], pattern: list[int]) -> list[int]:
@@ -65,6 +188,7 @@ def parse_harmony_completion(tokenizer, generated_ids: list[int], limit: int) ->
 
 class GptOss20BModel:
     def __init__(self, config: dict):
+        dependencies = check_mxfp4_dependencies(config["backend_version"])
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -72,10 +196,6 @@ class GptOss20BModel:
             raise RuntimeError("GPT-OSS-20B requires a CUDA GPU")
         if torch.cuda.get_device_capability(0) < (7, 5):
             raise RuntimeError("MXFP4 kernels require CUDA compute capability at least 7.5")
-        installed_backend = importlib.metadata.version("transformers")
-        if installed_backend != config["backend_version"]:
-            raise RuntimeError(f"Transformers {installed_backend} differs from configured "
-                               f"backend_version {config['backend_version']}")
         seed = config["seed"]
         random.seed(seed)
         torch.manual_seed(seed)
@@ -90,7 +210,7 @@ class GptOss20BModel:
         self.temperature = config["temperature"]
         self.top_p = config["top_p"]
         self.top_k = config["top_k"]
-        self.backend_version = installed_backend
+        self.backend_version = dependencies["transformers"]
         self.prompt_date = config["prompt_date"]
         revision = {"revision": self.model_revision}
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, **revision)
@@ -106,17 +226,10 @@ class GptOss20BModel:
             self.model_id, device_map={"": 0}, dtype="auto", low_cpu_mem_usage=True,
             **revision)
         self.model.eval()
-        quantization = getattr(self.model.config, "quantization_config", {})
-        method = (quantization.get("quant_method") if isinstance(quantization, dict)
-                  else getattr(quantization, "quant_method", None))
-        packed = [(name, parameter) for name, parameter in self.model.named_parameters()
-                  if name.endswith(("gate_up_proj", "down_proj")) and
-                  parameter.dtype == torch.uint8]
-        if method != "mxfp4" or not packed:
-            raise RuntimeError("GPT-OSS expert weights were not retained as packed MXFP4")
-        if any(parameter.device.type != "cuda" for _, parameter in self.model.named_parameters()):
-            raise RuntimeError("GPT-OSS model was partly offloaded from the requested GPU")
-        self.packed_expert_parameters = len(packed)
+        from transformers.integrations import mxfp4 as mxfp4_integration
+        self.quantization_verification = verify_packed_mxfp4(
+            self.model, torch, getattr(mxfp4_integration, "triton_kernels_hub", None),
+            mxfp4_integration.Mxfp4GptOssExperts, cuda_index=0)
         self.peak_gpu_memory_bytes = int(torch.cuda.max_memory_allocated(0))
         self.peak_gpu_reserved_bytes = int(torch.cuda.max_memory_reserved(0))
 
@@ -124,7 +237,7 @@ class GptOss20BModel:
         return {"model_type": "gpt_oss_20b", "model_id": self.model_id,
                 "model_revision": self.model_revision, "tokenizer_revision": self.model_revision,
                 "backend": "transformers", "backend_version": self.backend_version,
-                "quantization": "mxfp4_packed", "packed_expert_parameters": self.packed_expert_parameters,
+                "quantization": "mxfp4_packed", **self.quantization_verification,
                 "chat_template": "pinned_tokenizer_harmony", "prompt_date": self.prompt_date,
                 "chat_template_sha256": hashlib.sha256(self.chat_template.encode()).hexdigest(),
                 "reasoning_effort": self.reasoning_effort,
