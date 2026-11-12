@@ -24,6 +24,7 @@ class SupportResult:
     retrieval_seconds: float = 0.0
     revision_messages: list[dict] | None = None
     fallback_reason: str | None = None
+    generation_model: str | None = None
 
 
 class SupportAdapter(Protocol):
@@ -124,6 +125,20 @@ class NoSupport:
         return SupportResult(messages)
 
 
+class StrongerModelDelegation:
+    support_id = "stronger_model_delegation"
+    phase = "before_proposal"
+    version = "stronger_model_delegation_v1"
+    requirements = ()
+
+    def __init__(self, generation_model: str):
+        self.generation_model = generation_model
+
+    def invoke(self, context, messages, action):
+        return SupportResult(messages, {"mechanism": self.version, "support_id": self.support_id},
+                             calls=1, generation_model=self.generation_model)
+
+
 class ReconsiderationSupport:
     support_id = RECONSIDERATION
     phase = "after_proposal"
@@ -213,6 +228,9 @@ class ActionTrajectorySupport:
 
 
 register_support("none", lambda config, model, resources: NoSupport())
+register_support(StrongerModelDelegation.support_id,
+                 lambda config, model, resources: StrongerModelDelegation(
+                     getattr(model, "delegated_model_type", "gpt_oss_20b")))
 register_support(RECONSIDERATION, lambda config, model, resources: ReconsiderationSupport())
 register_support(LEGACY_ACTION_MEMORY, lambda config, model, resources: LegacyActionMemorySupport(required_resource(resources, "legacy")))
 register_support(TASK_TRAJECTORY, lambda config, model, resources: TaskTrajectorySupport(required_resource(resources, "trajectory")))

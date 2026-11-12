@@ -1,0 +1,119 @@
+{
+  "schema_version": 2,
+  "benchmark": "textcraft",
+  "manifest": "manifests/textcraft/development.json",
+  "partition_manifests": {
+    "development": "manifests/textcraft/development.json",
+    "heldout": "manifests/textcraft/heldout.json"
+  },
+  "condition": "modular_v1",
+  "model_type": "hybrid_delegation",
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "model_revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+  "quantization": "nf4_4bit",
+  "seed": 42,
+  "history_window": 8,
+  "max_actions": 30,
+  "max_decisions": 30,
+  "max_model_calls": 30,
+  "max_new_tokens": 100,
+  "do_sample": false,
+  "max_support_calls": 5,
+  "max_support_tokens": 1000000,
+  "supports": [
+    "stronger_model_delegation"
+  ],
+  "support_versions": {
+    "stronger_model_delegation": "stronger_model_delegation_v1"
+  },
+  "selection_policy": {
+    "id": "failure_triggered_v1",
+    "support_id": "stronger_model_delegation",
+    "phase": "before_proposal",
+    "threshold": 2,
+    "cooldown": 0
+  },
+  "output_root": "results/hybrid_textcraft_dev_failure_triggered",
+  "delegation_fallback_to_primary": true,
+  "component_modules": [
+    "agent_support.gpt_oss_model",
+    "agent_support.hybrid_model"
+  ],
+  "worker_models": {
+    "primary": {
+      "model": {
+        "schema_version": 2,
+        "benchmark": "textcraft",
+        "manifest": "manifests/textcraft/development.json",
+        "partition_manifests": {
+          "development": "manifests/textcraft/development.json",
+          "heldout": "manifests/textcraft/heldout.json"
+        },
+        "condition": "modular_v1",
+        "model_type": "qwen",
+        "model_id": "Qwen/Qwen2.5-7B-Instruct",
+        "model_revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+        "quantization": "nf4_4bit",
+        "seed": 42,
+        "history_window": 8,
+        "max_actions": 30,
+        "max_decisions": 30,
+        "max_model_calls": 30,
+        "max_new_tokens": 100,
+        "do_sample": false,
+        "max_support_calls": 0,
+        "max_support_tokens": 0,
+        "supports": [],
+        "support_versions": {},
+        "selection_policy": {
+          "id": "never_v1"
+        },
+        "output_root": "results/standalone_models_textcraft_dev_qwen"
+      },
+      "python_env": "AGENT_SUPPORT_QWEN_PYTHON",
+      "hf_home_env": "AGENT_SUPPORT_QWEN_HF_HOME"
+    },
+    "delegated": {
+      "model": {
+        "schema_version": 2,
+        "benchmark": "textcraft",
+        "manifest": "manifests/textcraft/development.json",
+        "partition_manifests": {
+          "development": "manifests/textcraft/development.json",
+          "heldout": "manifests/textcraft/heldout.json"
+        },
+        "condition": "modular_v1",
+        "model_type": "gpt_oss_20b",
+        "model_id": "openai/gpt-oss-20b",
+        "model_revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+        "quantization": "mxfp4_packed",
+        "seed": 42,
+        "history_window": 8,
+        "max_actions": 30,
+        "max_decisions": 30,
+        "max_model_calls": 30,
+        "max_new_tokens": 1024,
+        "do_sample": true,
+        "max_support_calls": 0,
+        "max_support_tokens": 0,
+        "supports": [],
+        "support_versions": {},
+        "selection_policy": {
+          "id": "never_v1"
+        },
+        "output_root": "results/standalone_models_textcraft_dev_gptoss20b_low",
+        "reasoning_effort": "low",
+        "backend_version": "5.22.2",
+        "prompt_date": "2026-11-12",
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": 0,
+        "component_modules": [
+          "agent_support.gpt_oss_model"
+        ]
+      },
+      "python_env": "AGENT_SUPPORT_GPTOSS_PYTHON",
+      "hf_home_env": "AGENT_SUPPORT_GPTOSS_HF_HOME"
+    }
+  }
+}

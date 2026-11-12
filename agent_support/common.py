@@ -207,6 +207,32 @@ def validate_experiment_config(config: dict, benchmark: str) -> None:
                 raise ValueError(f"GPT-OSS {key} must be in (0, 1]")
         if type(config.get("top_k")) is not int or config["top_k"] < 0:
             raise ValueError("GPT-OSS top_k must be nonnegative")
+    if config["model_type"] == "hybrid_delegation":
+        workers = config.get("worker_models")
+        if not isinstance(workers, dict) or set(workers) != {"primary", "delegated"}:
+            raise ValueError("Hybrid configuration requires primary and delegated worker models")
+        for role, expected_type in (("primary", "qwen"), ("delegated", "gpt_oss_20b")):
+            worker = workers[role]
+            if (not isinstance(worker, dict) or set(worker) != {"model", "python_env", "hf_home_env"}
+                    or any(not isinstance(worker[key], str) or not worker[key]
+                           for key in ("python_env", "hf_home_env"))
+                    or not isinstance(worker["model"], dict)
+                    or worker["model"].get("model_type") != expected_type):
+                raise ValueError(f"Invalid {role} worker configuration")
+            validate_experiment_config(worker["model"], benchmark)
+            for key in ("manifest", "partition_manifests", "seed", "history_window",
+                        "max_actions", "max_decisions", "max_model_calls"):
+                if worker["model"][key] != config[key]:
+                    raise ValueError(f"Hybrid {role} worker differs on {key}")
+        for key in ("model_id", "model_revision", "quantization", "do_sample", "max_new_tokens"):
+            if config.get(key) != workers["primary"]["model"].get(key):
+                raise ValueError(f"Hybrid primary worker differs on {key}")
+        if type(config.get("delegation_fallback_to_primary")) is not bool:
+            raise ValueError("delegation_fallback_to_primary must be Boolean")
+        if config.get("supports") not in ([], ["stronger_model_delegation"]):
+            raise ValueError("Initial hybrid runs support only stronger-model delegation")
+        if config.get("max_support_calls") not in (0, 1, 3, 5, 10):
+            raise ValueError("Hybrid max_support_calls must be 0, 1, 3, 5, or 10")
     if type(config.get("do_sample")) is not bool:
         raise ValueError("do_sample must be explicit and Boolean")
     if config["model_type"] == "qwen" and config["do_sample"]:
@@ -246,6 +272,11 @@ def validate_experiment_config(config: dict, benchmark: str) -> None:
     if policy["id"] in {"always_v1", "random_v1", "failure_triggered_v1"}:
         if policy.get("support_id") not in supports or policy["support_id"] == "none":
             raise ValueError("Policy support_id must name an available support")
+        if policy.get("phase", "after_proposal") not in {"before_proposal", "after_proposal"}:
+            raise ValueError("Policy phase is invalid")
+        if (policy.get("support_id") == "stronger_model_delegation" and
+                policy.get("phase") != "before_proposal"):
+            raise ValueError("Delegation policy must select in before_proposal phase")
     if policy["id"] == "random_v1":
         if type(policy.get("probability")) not in (float, int) or not 0 <= policy["probability"] <= 1:
             raise ValueError("Random policy probability must be in [0, 1]")

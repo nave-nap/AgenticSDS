@@ -72,11 +72,21 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
     reasoning_tokens = final_tokens = 0
     generation_failures = 0
     peak_gpu_memory_allocated_bytes = peak_gpu_memory_reserved_bytes = 0
+    peak_combined_worker_cuda_allocated_bytes = peak_combined_worker_cuda_reserved_bytes = 0
     inference_seconds = 0.0
     support_calls = support_model_calls = support_input_tokens = support_output_tokens = support_parse_errors = 0
     model_calls = 0
     retrieval_seconds = 0.0
     success = False
+    hybrid = hasattr(model, "generate_for") and hasattr(model, "primary_model_type")
+    primary_type = getattr(model, "primary_model_type", "qwen") if hybrid else None
+    delegated_type = getattr(model, "delegated_model_type", "gpt_oss_20b") if hybrid else None
+    usage = {kind: {"model_calls": 0, "input_tokens": 0, "output_tokens": 0,
+                    "reasoning_tokens": 0, "final_tokens": 0, "inference_seconds": 0.0,
+                    "peak_gpu_memory_allocated_bytes": 0, "peak_gpu_memory_reserved_bytes": 0}
+             for kind in (primary_type, delegated_type)} if hybrid else {}
+    delegation_selections = blocked_delegations = delegation_attempts = 0
+    valid_delegated_actions = delegated_actions_without_failure = fallback_calls = 0
     condition = config.get("condition", "m2_always" if support is not None else "baseline")
     policy = support_policy or make_support_policy(config, task["task_id"])
     adapters = support_adapters or make_supports(config, model, {"legacy": support, "trajectory": trajectory_support})
@@ -126,6 +136,13 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
             before = before_decision.support_ids
             blocked_supports = []
             before_events = []
+            generation_model = primary_type
+            delegation_event = None
+            delegation_reservation = None
+            if hybrid:
+                delegation_selections += sum(
+                    adapters[choice].generation_model is not None for choice in before
+                    if hasattr(adapters[choice], "generation_model"))
             for choice in before:
                 if choice not in adapters or adapters[choice].phase != "before_proposal":
                     raise ValueError(f"Policy selected unavailable or misphased support: {choice}")
@@ -133,17 +150,41 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                 expected = adapter.expected_calls() if hasattr(adapter, "expected_calls") else 1
                 if reason := budget_block(expected):
                     blocked_supports.append({"support_id": choice, "reason": reason})
+                    if hybrid and getattr(adapter, "generation_model", None):
+                        blocked_delegations += 1
                     continue
                 outcome = adapter.invoke(context("before_proposal", decision, available), messages, None)
                 if config.get("schema_version") == 2 and (type(outcome.calls) is not int or
                         outcome.calls < 0 or outcome.calls > expected):
                     raise RuntimeError(f"Support {choice} reported {outcome.calls} calls after reserving {expected}")
+                if outcome.generation_model is not None:
+                    if not hybrid or generation_model != primary_type:
+                        raise ValueError("Only one replacement generation model may be selected")
+                    if outcome.generation_model != delegated_type:
+                        raise ValueError("Delegation selected an unconfigured model")
+                    reservation = (model.count_messages_tokens_for(outcome.generation_model, outcome.messages)
+                                   + model.max_new_tokens_for(outcome.generation_model))
+                    if support_input_tokens + support_output_tokens + reservation > config["max_support_tokens"]:
+                        blocked_supports.append({"support_id": choice, "reason": "support_token_budget",
+                                                 "required_reservation": reservation})
+                        blocked_delegations += 1
+                        continue
+                    generation_model = outcome.generation_model
+                    delegation_event = outcome.event
+                    delegation_reservation = reservation
+                    if delegation_event is not None:
+                        delegation_event["reserved_tokens_before_generation"] = reservation
                 messages = outcome.messages
                 support_calls += outcome.calls
+                if outcome.generation_model is not None and outcome.calls:
+                    policy.on_executed(decision) if hasattr(policy, "on_executed") else None
                 retrieval_seconds += outcome.retrieval_seconds
                 if outcome.event is not None:
                     before_events.append(outcome.event)
-            generation = model.generate(messages)
+            if hybrid:
+                generation = model.generate_for(generation_model, messages)
+            else:
+                generation = model.generate(messages)
             model_calls += 1
             input_tokens += generation["input_tokens"]
             output_tokens += generation["output_tokens"]
@@ -158,6 +199,81 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
             inference_seconds += generation["inference_seconds"]
             raw = generation["text"]
             action = driver.parse(raw, available)
+            generation_attempts = []
+            fallback_occurred = False
+            fallback_blocked = None
+            actual_generation_model = generation_model
+            if hybrid:
+                def attempt(model_type, response, parsed):
+                    nonlocal generation_failures, reasoning_tokens, final_tokens
+                    nonlocal peak_combined_worker_cuda_allocated_bytes, peak_combined_worker_cuda_reserved_bytes
+                    item = usage[model_type]
+                    item["model_calls"] += 1
+                    for key in ("input_tokens", "output_tokens", "reasoning_tokens", "final_tokens"):
+                        item[key] += response.get(key, 0)
+                    item["inference_seconds"] += response["inference_seconds"]
+                    memory = response.get("worker_cuda_memory", {})
+                    item["peak_gpu_memory_allocated_bytes"] = max(
+                        item["peak_gpu_memory_allocated_bytes"], memory.get("peak_allocated_bytes", 0))
+                    item["peak_gpu_memory_reserved_bytes"] = max(
+                        item["peak_gpu_memory_reserved_bytes"], memory.get("peak_reserved_bytes", 0))
+                    peak_combined_worker_cuda_allocated_bytes = max(
+                        peak_combined_worker_cuda_allocated_bytes,
+                        response.get("combined_worker_cuda_allocated_bytes", 0))
+                    peak_combined_worker_cuda_reserved_bytes = max(
+                        peak_combined_worker_cuda_reserved_bytes,
+                        response.get("combined_worker_cuda_reserved_bytes", 0))
+                    status_value = response.get("generation_status", "complete")
+                    generation_attempts.append({"model_type": model_type,
+                                                "generation_status": status_value,
+                                                "generation_error": response.get("generation_error"),
+                                                "parse_valid": parsed is not None,
+                                                "text": response["text"],
+                                                "raw_completion": response.get("raw_completion"),
+                                                "input_tokens": response["input_tokens"],
+                                                "output_tokens": response["output_tokens"],
+                                                "reasoning_tokens": response.get("reasoning_tokens", 0),
+                                                "final_tokens": response.get("final_tokens", 0),
+                                                "inference_seconds": response["inference_seconds"],
+                                                "worker_cuda_memory": memory})
+                    generation_attempts[-1]["combined_worker_cuda_allocated_bytes"] = response.get(
+                        "combined_worker_cuda_allocated_bytes", 0)
+                    generation_attempts[-1]["combined_worker_cuda_reserved_bytes"] = response.get(
+                        "combined_worker_cuda_reserved_bytes", 0)
+                    if status_value != "complete" and "reasoning_tokens" not in response:
+                        generation_failures += 1
+
+                attempt(generation_model, generation, action)
+                if generation_model == delegated_type:
+                    delegation_attempts += 1
+                    support_model_calls += 1
+                    support_input_tokens += generation["input_tokens"]
+                    support_output_tokens += generation["output_tokens"]
+                    if delegation_event is not None:
+                        delegation_event["actual_tokens_after_generation"] = (
+                            generation["input_tokens"] + generation["output_tokens"])
+                    if (generation["input_tokens"] + generation["output_tokens"] >
+                            delegation_reservation):
+                        raise RuntimeError("Actual delegated tokens exceeded the pre-generation reservation")
+                    if support_input_tokens + support_output_tokens > config["max_support_tokens"]:
+                        raise RuntimeError("Actual delegated tokens exceeded max_support_tokens after generation")
+                    valid_delegated_actions += int(action is not None)
+                    if action is None and config.get("delegation_fallback_to_primary", False):
+                        if model_calls >= config["max_model_calls"]:
+                            fallback_blocked = "model_call_budget"
+                        else:
+                            fallback = model.generate_for(primary_type, messages)
+                            model_calls += 1
+                            fallback_calls += 1
+                            fallback_occurred = True
+                            input_tokens += fallback["input_tokens"]
+                            output_tokens += fallback["output_tokens"]
+                            inference_seconds += fallback["inference_seconds"]
+                            raw = fallback["text"]
+                            action = driver.parse(raw, available)
+                            actual_generation_model = primary_type
+                            attempt(primary_type, fallback, action)
+                            generation = fallback
             after_decision = selection_decision(policy, context("after_proposal", decision, available, action, raw))
             after = after_decision.support_ids
             record = {
@@ -174,6 +290,29 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                         "raw_completion", "peak_gpu_memory_allocated_bytes", "peak_gpu_memory_reserved_bytes"):
                 if key in generation:
                     record[key] = generation[key]
+            if hybrid:
+                record.update({"selected_generation_model": delegated_type if
+                               any(getattr(adapters[choice], "generation_model", None) for choice in before)
+                               else primary_type,
+                               "actual_generation_model": actual_generation_model,
+                               "delegation_attempted": generation_model == delegated_type,
+                               "delegation_blocked": any(getattr(adapters.get(item["support_id"]),
+                                                          "generation_model", None) for item in blocked_supports),
+                               "fallback_occurred": fallback_occurred,
+                               "fallback_blocked": fallback_blocked,
+                               "generation_attempts": generation_attempts,
+                               "remaining_delegations": config["max_support_calls"] - support_calls,
+                               "remaining_model_calls": config["max_model_calls"] - model_calls,
+                               "remaining_actions": config["max_actions"] - actions_taken,
+                               "remaining_decisions": config["max_decisions"] - decision,
+                               "remaining_support_tokens": config["max_support_tokens"] -
+                               support_input_tokens - support_output_tokens})
+                record["input_tokens"] = sum(item["input_tokens"] for item in generation_attempts)
+                record["output_tokens"] = sum(item["output_tokens"] for item in generation_attempts)
+                record["inference_seconds"] = round(sum(item["inference_seconds"]
+                                                        for item in generation_attempts), 3)
+                record["reasoning_tokens"] = sum(item["reasoning_tokens"] for item in generation_attempts)
+                record["final_tokens"] = sum(item["final_tokens"] for item in generation_attempts)
             if config.get("schema_version") == 2 or support is not None or trajectory_support is not None or before or after:
                 record["support_policy"] = {"policy_id": policy.policy_id,
                                             "before_proposal": list(before),
@@ -268,6 +407,8 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                 parser_errors += 1
                 record["error"] = "parse_error"
                 record["output_observation"] = "Invalid action format. Reply with exactly one valid command."
+                if hybrid:
+                    record["environment_failed_action"] = None
                 trace.append(record)
                 if driver.parse_error_ends_episode():
                     status = "parse_error"
@@ -285,6 +426,11 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
             actions_taken += 1
             failed_actions += int(step.get("failed_action", False))
             failure_history.append(bool(step.get("failed_action", False)))
+            if hybrid:
+                record["environment_failed_action"] = bool(step.get("failed_action", False))
+                record["remaining_actions"] = config["max_actions"] - actions_taken
+                if generation_model == delegated_type and not fallback_occurred and not step.get("failed_action", False):
+                    delegated_actions_without_failure += 1
             record.update({
                 "environment_action_number": actions_taken,
                 "output_observation": step["observation"],
@@ -345,6 +491,19 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
         result["compute_cost"] = {"input_tokens": input_tokens, "output_tokens": output_tokens,
                                   "inference_seconds": round(inference_seconds, 3),
                                   "retrieval_seconds": round(retrieval_seconds, 3)}
+        if hybrid:
+            result.update({"reasoning_tokens": reasoning_tokens, "final_tokens": final_tokens,
+                           "generation_failures": generation_failures,
+                           "peak_gpu_memory_allocated_bytes": peak_gpu_memory_allocated_bytes,
+                           "peak_gpu_memory_reserved_bytes": peak_gpu_memory_reserved_bytes,
+                           "model_usage": usage, "delegation_selections": delegation_selections,
+                           "blocked_delegations": blocked_delegations,
+                           "delegation_attempts": delegation_attempts,
+                           "valid_delegated_actions": valid_delegated_actions,
+                           "delegated_actions_without_failure": delegated_actions_without_failure,
+                           "fallback_calls": fallback_calls,
+                           "peak_combined_worker_cuda_allocated_bytes": peak_combined_worker_cuda_allocated_bytes,
+                           "peak_combined_worker_cuda_reserved_bytes": peak_combined_worker_cuda_reserved_bytes})
     return result
 
 
@@ -384,6 +543,23 @@ def summarize(episodes: list[dict]) -> dict:
         for key in ("reasoning_tokens", "final_tokens", "generation_failures"):
             summary[key] = sum(item[key] for item in episodes)
         for key in ("peak_gpu_memory_allocated_bytes", "peak_gpu_memory_reserved_bytes"):
+            summary[key] = max(item[key] for item in episodes)
+    if episodes and "model_usage" in episodes[0]:
+        summary["model_usage"] = {
+            kind: {key: (round(sum(item["model_usage"][kind][key] for item in episodes), 3)
+                         if key == "inference_seconds" else
+                         max(item["model_usage"][kind][key] for item in episodes)
+                         if key.startswith("peak_gpu_memory_") else
+                         sum(item["model_usage"][kind][key] for item in episodes))
+                   for key in episodes[0]["model_usage"][kind]}
+            for kind in episodes[0]["model_usage"]}
+        for key in ("delegation_selections", "blocked_delegations", "delegation_attempts",
+                    "valid_delegated_actions", "delegated_actions_without_failure", "fallback_calls"):
+            summary[key] = sum(item[key] for item in episodes)
+        summary["delegations_per_task"] = [item["delegation_attempts"] for item in episodes]
+        summary["elapsed_seconds"] = round(sum(item["elapsed_seconds"] for item in episodes), 3)
+        for key in ("peak_combined_worker_cuda_allocated_bytes",
+                    "peak_combined_worker_cuda_reserved_bytes"):
             summary[key] = max(item[key] for item in episodes)
     return summary
 
@@ -561,7 +737,10 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
             signal.signal(signal.SIGTERM, request_preemption)
         except ValueError:  # Signal handlers can only be installed in the main thread.
             previous_sigterm = None
+    actual_model = None
     try:
+        if "worker_models" in config:
+            os.environ["AGENT_SUPPORT_WORKER_LOG_DIR"] = str((directory / "workers").resolve())
         actual_model = model if model is not None else make_model(config)
         if config.get("schema_version") == 2:
             model_metadata = actual_model.metadata()
@@ -593,6 +772,8 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         for index, task in enumerate(selected):
             if index in completed:
                 continue
+            if hasattr(actual_model, "begin_episode"):
+                actual_model.begin_episode(task["task_id"])
             result = run_episode(manifest["benchmark"], task, config, actual_model,
                                  episode_factory, support=support,
                                  trajectory_support=trajectory_support,
@@ -624,12 +805,21 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
     finally:
         if previous_sigterm is not None:
             signal.signal(signal.SIGTERM, previous_sigterm)
-        metadata["completed_task_count"] = len(episodes)
-        metadata["finished_utc"] = datetime.now(timezone.utc).isoformat()
         try:
-            write_json_atomic(directory / "run.json", metadata)
+            if actual_model is not None and hasattr(actual_model, "close"):
+                actual_model.close()
+        except Exception as exc:
+            if metadata["status"] == "complete":
+                metadata["status"] = "failed"
+                metadata["error"] = f"Model worker shutdown failed: {exc!r}"
+            raise
         finally:
-            lease.close()
+            metadata["completed_task_count"] = len(episodes)
+            metadata["finished_utc"] = datetime.now(timezone.utc).isoformat()
+            try:
+                write_json_atomic(directory / "run.json", metadata)
+            finally:
+                lease.close()
     return directory
 
 

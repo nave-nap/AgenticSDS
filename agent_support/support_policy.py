@@ -110,9 +110,10 @@ class AlwaysPolicy:
 
     def __init__(self, spec: dict, task_id: str = ""):
         self.support_id = spec["support_id"]
+        self.phase = spec.get("phase", "after_proposal")
 
     def select(self, context: TurnContext) -> SelectionDecision:
-        if context.phase != "after_proposal" or context.proposed_action is None:
+        if context.phase != self.phase or (self.phase == "after_proposal" and context.proposed_action is None):
             return SelectionDecision(reason="ineligible_phase_or_proposal")
         return SelectionDecision((self.support_id,), "always", "configured_always")
 
@@ -122,12 +123,13 @@ class RandomPolicy:
 
     def __init__(self, spec: dict, task_id: str = ""):
         self.support_id = spec["support_id"]
+        self.phase = spec.get("phase", "after_proposal")
         self.probability = spec["probability"]
         seed = f"{spec['seed']}\0{task_id}\0{self.policy_id}".encode()
         self.rng = random.Random(int.from_bytes(hashlib.sha256(seed).digest(), "big"))
 
     def select(self, context: TurnContext) -> SelectionDecision:
-        if context.phase != "after_proposal" or context.proposed_action is None:
+        if context.phase != self.phase or (self.phase == "after_proposal" and context.proposed_action is None):
             return SelectionDecision(reason="ineligible_phase_or_proposal")
         chosen = self.rng.random() < self.probability
         return SelectionDecision((self.support_id,) if chosen else (),
@@ -140,12 +142,13 @@ class FailureTriggeredPolicy:
 
     def __init__(self, spec: dict, task_id: str = ""):
         self.support_id = spec["support_id"]
+        self.phase = spec.get("phase", "after_proposal")
         self.threshold = spec["threshold"]
         self.cooldown = spec["cooldown"]
         self.last_selected_decision = -10**9
 
     def select(self, context: TurnContext) -> SelectionDecision:
-        if context.phase != "after_proposal" or context.proposed_action is None:
+        if context.phase != self.phase or (self.phase == "after_proposal" and context.proposed_action is None):
             return SelectionDecision(reason="ineligible_phase_or_proposal")
         remaining = max(0, self.cooldown - (context.decision - self.last_selected_decision - 1))
         if remaining:
