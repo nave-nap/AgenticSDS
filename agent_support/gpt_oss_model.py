@@ -266,7 +266,8 @@ class GptOss20BModel:
             **({"return_tensors": "pt", "return_dict": True} if tensors else {}))
 
     def count_messages_tokens(self, messages: list[dict]) -> int:
-        return len(self._encode_messages(messages, tensors=False))
+        inputs = self._encode_messages(messages, tensors=True)
+        return int(inputs["input_ids"].shape[1])
 
     def generate(self, messages: list[dict], max_new_tokens: int | None = None) -> dict:
         inputs = self._encode_messages(messages, tensors=True).to(self.model.device)

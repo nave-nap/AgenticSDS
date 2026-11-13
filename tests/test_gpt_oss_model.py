@@ -2,6 +2,8 @@
 
 from pathlib import Path
 from contextlib import nullcontext
+import io
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +13,7 @@ from agent_support.components import load_components
 from agent_support.gpt_oss_model import (ANALYSIS_MARKER, END_TOKEN, FINAL_MARKER,
                                          RETURN_TOKEN, GptOss20BModel, parse_harmony_completion)
 from agent_support.model import make_model, MODEL_REGISTRY
+from agent_support.model_worker import serve
 from agent_support.runner import run_episode
 
 
@@ -45,6 +48,20 @@ class HarmonyTokenizer:
         return ids
 
     pad_token_id = 1003
+
+
+class BatchEncodingTokenizer(HarmonyTokenizer):
+    """Match Transformers v5's default mapping return for chat templates."""
+
+    def __init__(self):
+        self.calls = []
+
+    def apply_chat_template(self, messages, **kwargs):
+        self.calls.append(kwargs)
+        ids = self.encode("<|start|>assistant" + repr(messages))
+        if kwargs.get("return_tensors"):
+            return FakeInputs(ids)
+        return {"input_ids": ids, "attention_mask": [1] * len(ids)}
 
 
 class FakeIds:
@@ -142,6 +159,69 @@ def test_mocked_adapter_generation_uses_harmony_and_counts_tokens():
     assert adapter.tokenizer.template_args["chat_template"] == "fixed template"
     assert adapter.model.generation_args["eos_token_id"] == adapter.return_token_id
     assert adapter.count_messages_tokens(messages) == result["input_tokens"]
+
+
+@pytest.mark.parametrize("history_length", [0, 8])
+def test_v5_batch_encoding_count_matches_generation_input_for_history(history_length):
+    adapter = object.__new__(GptOss20BModel)
+    adapter.tokenizer = BatchEncodingTokenizer()
+    completion = FINAL_MARKER + "Action: inventory" + RETURN_TOKEN
+    adapter.model = FakeBackend(adapter.tokenizer.encode(completion))
+    adapter.torch = SimpleNamespace(cuda=SimpleNamespace(
+        synchronize=lambda *_: None, max_memory_allocated=lambda *_: 123,
+        max_memory_reserved=lambda *_: 456), inference_mode=nullcontext)
+    adapter.max_new_tokens = 1024
+    adapter.reasoning_effort = "low"
+    adapter.chat_template = "pinned Harmony template with 2026-11-12"
+    adapter.temperature = adapter.top_p = 1.0
+    adapter.top_k = 0
+    adapter.return_token_id = adapter.tokenizer.convert_tokens_to_ids(RETURN_TOKEN)
+    adapter.peak_gpu_memory_bytes = adapter.peak_gpu_reserved_bytes = 0
+    messages = [{"role": "user", "content": "Goal: craft plank."}]
+    messages += [{"role": "assistant", "content": "Action: inventory"},
+                 {"role": "user", "content": "Could not craft wood yet."}] * history_length
+    legacy_shape = adapter._encode_messages(messages, tensors=False)
+    assert len(legacy_shape) == 2
+    assert len(legacy_shape["input_ids"]) > len(legacy_shape)
+    count = adapter.count_messages_tokens(messages)
+    generated = adapter.generate(messages)
+    assert count == generated["input_tokens"] == len(legacy_shape["input_ids"])
+    assert generated["input_tokens"] + generated["output_tokens"] <= count + adapter.max_new_tokens
+    assert all(call["reasoning_effort"] == "low" and
+               call["chat_template"] == adapter.chat_template and
+               call["add_generation_prompt"] is True for call in adapter.tokenizer.calls)
+    assert adapter.tokenizer.calls[-2]["return_tensors"] == "pt"
+    assert adapter.tokenizer.calls[-2]["return_dict"] is True
+
+
+def test_worker_token_count_rpc_uses_input_ids_not_mapping_length():
+    adapter = object.__new__(GptOss20BModel)
+    adapter.tokenizer = BatchEncodingTokenizer()
+    adapter.reasoning_effort = "low"
+    adapter.chat_template = "pinned Harmony template with 2026-11-12"
+
+    class Facade:
+        def metadata(self):
+            return {"model_id": "openai/gpt-oss-20b", "model_revision": "pinned"}
+        def count_messages_tokens(self, messages):
+            return adapter.count_messages_tokens(messages)
+        def generate(self, messages):
+            actual = adapter._encode_messages(messages, tensors=True)["input_ids"].shape[1]
+            return {"text": "Action: inventory", "input_tokens": actual,
+                    "output_tokens": 4, "inference_seconds": 0.1}
+
+    messages = [{"role": "user", "content": "Craft plank after getting wood."}]
+    source = io.StringIO("".join(json.dumps(item) + "\n" for item in (
+        {"op": "init", "config": {}},
+        {"op": "count_messages_tokens", "messages": messages},
+        {"op": "generate", "messages": messages},
+        {"op": "shutdown"})))
+    sink = io.StringIO()
+    serve(source, sink, lambda config: Facade())
+    replies = [json.loads(line) for line in sink.getvalue().splitlines()]
+    assert all(reply["ok"] for reply in replies)
+    assert replies[1]["count"] == replies[2]["generation"]["input_tokens"]
+    assert replies[1]["count"] > 2
 
 
 def test_config_selects_adapter_without_runner_branch(monkeypatch):

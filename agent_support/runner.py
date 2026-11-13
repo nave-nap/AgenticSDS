@@ -139,6 +139,8 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
             generation_model = primary_type
             delegation_event = None
             delegation_reservation = None
+            delegation_input_estimate = None
+            delegation_generation_limit = None
             if hybrid:
                 delegation_selections += sum(
                     adapters[choice].generation_model is not None for choice in before
@@ -162,8 +164,12 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                         raise ValueError("Only one replacement generation model may be selected")
                     if outcome.generation_model != delegated_type:
                         raise ValueError("Delegation selected an unconfigured model")
-                    reservation = (model.count_messages_tokens_for(outcome.generation_model, outcome.messages)
-                                   + model.max_new_tokens_for(outcome.generation_model))
+                    estimated_input = model.count_messages_tokens_for(outcome.generation_model, outcome.messages)
+                    generation_limit = model.max_new_tokens_for(outcome.generation_model)
+                    if (type(estimated_input) is not int or estimated_input < 0 or
+                            type(generation_limit) is not int or generation_limit <= 0):
+                        raise RuntimeError("Delegation token count or generation limit is invalid")
+                    reservation = estimated_input + generation_limit
                     if support_input_tokens + support_output_tokens + reservation > config["max_support_tokens"]:
                         blocked_supports.append({"support_id": choice, "reason": "support_token_budget",
                                                  "required_reservation": reservation})
@@ -172,8 +178,12 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                     generation_model = outcome.generation_model
                     delegation_event = outcome.event
                     delegation_reservation = reservation
+                    delegation_input_estimate = estimated_input
+                    delegation_generation_limit = generation_limit
                     if delegation_event is not None:
                         delegation_event["reserved_tokens_before_generation"] = reservation
+                        delegation_event["estimated_input_tokens_before_generation"] = estimated_input
+                        delegation_event["max_new_tokens_reserved"] = generation_limit
                 messages = outcome.messages
                 support_calls += outcome.calls
                 if outcome.generation_model is not None and outcome.calls:
@@ -254,9 +264,22 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                             generation["input_tokens"] + generation["output_tokens"])
                     if (generation["input_tokens"] + generation["output_tokens"] >
                             delegation_reservation):
-                        raise RuntimeError("Actual delegated tokens exceeded the pre-generation reservation")
+                        raise RuntimeError(
+                            "Actual delegated tokens exceeded the pre-generation reservation: "
+                            f"task_id={task['task_id']}, decision={decision}, model={generation_model}, "
+                            f"estimated_input_tokens={delegation_input_estimate}, "
+                            f"max_new_tokens={delegation_generation_limit}, "
+                            f"actual_input_tokens={generation['input_tokens']}, "
+                            f"actual_output_tokens={generation['output_tokens']}, "
+                            f"reasoning_tokens_in_output={generation.get('reasoning_tokens', 0)}, "
+                            f"reserved={delegation_reservation}, "
+                            f"actual_total={generation['input_tokens'] + generation['output_tokens']}")
                     if support_input_tokens + support_output_tokens > config["max_support_tokens"]:
-                        raise RuntimeError("Actual delegated tokens exceeded max_support_tokens after generation")
+                        raise RuntimeError(
+                            "Actual delegated tokens exceeded max_support_tokens after generation: "
+                            f"task_id={task['task_id']}, decision={decision}, model={generation_model}, "
+                            f"used={support_input_tokens + support_output_tokens}, "
+                            f"limit={config['max_support_tokens']}")
                     valid_delegated_actions += int(action is not None)
                     if action is None and config.get("delegation_fallback_to_primary", False):
                         if model_calls >= config["max_model_calls"]:

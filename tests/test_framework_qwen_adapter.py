@@ -59,4 +59,5 @@ def test_qwen_adapter_keeps_chat_template_greedy_decoding_and_usage():
     model.generate([{"role": "user", "content": "Choose."}], max_new_tokens=5)
     assert backend.calls[1]["max_new_tokens"] == 5
     assert model.count_messages_tokens([]) == 2
+    assert model.count_messages_tokens([{"role": "user", "content": "Choose."}]) == result["input_tokens"]
     assert model.metadata()["model_revision"] == "a" * 40

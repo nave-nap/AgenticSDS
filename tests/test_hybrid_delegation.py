@@ -1,6 +1,7 @@
 """CPU-only delegation, accounting, policy, and checkpoint tests."""
 
 import copy
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -186,8 +187,56 @@ def test_actual_tokens_above_reservation_fail_visibly():
     class Undercounting(Models):
         def count_messages_tokens_for(self, kind, messages):
             return 8
-    with pytest.raises(RuntimeError, match="Actual delegated tokens exceeded"):
+    with pytest.raises(RuntimeError, match="estimated_input_tokens=8, max_new_tokens=4, "
+                                           "actual_input_tokens=10, actual_output_tokens=4"):
         episode_run(config(cap=1), Undercounting())
+
+
+def test_reservation_uses_selected_1024_limit_and_reasoning_is_counted_once():
+    class Counting(Models):
+        def count_messages_tokens_for(self, kind, messages):
+            return len(repr(messages))
+        def max_new_tokens_for(self, kind):
+            return 1024 if kind == "gpt_oss_20b" else 100
+        def generate_for(self, kind, messages):
+            result = super().generate_for(kind, messages)
+            if kind == "gpt_oss_20b":
+                result.update(input_tokens=self.count_messages_tokens_for(kind, messages),
+                              output_tokens=1024, reasoning_tokens=250, final_tokens=774)
+            return result
+    result, _ = episode_run(config(cap=3, max_support_tokens=1_000_000), Counting())
+    reservations = []
+    for step in result["trace"]:
+        event = step["support_events"][0]
+        attempt = step["generation_attempts"][0]
+        assert event["estimated_input_tokens_before_generation"] == attempt["input_tokens"]
+        assert event["max_new_tokens_reserved"] == 1024
+        assert event["reserved_tokens_before_generation"] == attempt["input_tokens"] + 1024
+        assert event["actual_tokens_after_generation"] == attempt["input_tokens"] + 1024
+        assert event["actual_tokens_after_generation"] == event["reserved_tokens_before_generation"]
+        reservations.append(event["reserved_tokens_before_generation"])
+    assert reservations == sorted(reservations) and reservations[-1] > reservations[0]
+    assert result["reasoning_tokens"] == 750
+    assert result["output_tokens"] == 3072
+    assert result["budgets"]["used"]["support_tokens"] == result["input_tokens"] + 3072
+
+
+def test_saved_episode_reservation_audit(monkeypatch, capsys, tmp_path):
+    from scripts.audit_hybrid_reservations import main
+
+    item = config(cap=1)
+    episode, _ = episode_run(item, Models())
+    directory = tmp_path / "run"
+    (directory / "episodes").mkdir(parents=True)
+    for filename, data in (("run.json", {"status": "failed"}),
+                           ("config.json", item), ("episodes/0000.json", episode)):
+        (directory / filename).write_text(json.dumps(data))
+    monkeypatch.setattr("sys.argv", ["audit_hybrid_reservations", str(directory)])
+    main()
+    output = capsys.readouterr().out
+    assert "saved_episodes=1" in output
+    assert "support_call_budget" in output
+    assert "No support-token budget blocks" in output
 
 
 def test_generation_failure_is_not_environment_failure():
