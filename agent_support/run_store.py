@@ -3,12 +3,51 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .common import canonical_digest, read_json, validate_manifest, write_json_atomic
+
+
+_ALLOCATION_IDENTIFIERS = frozenset({"pid", "process_id", "worker_pid", "gpu_uuid",
+                                     "gpu_device_uuid", "gpu_pci_bus_id"})
+_MAX_GPU_MEMORY_DIFFERENCE_BYTES = 1 << 30
+
+
+def compare_model_metadata(previous: dict, current: dict) -> dict:
+    """Compare execution metadata after JSON normalization, retaining every difference."""
+    old = json.loads(json.dumps(previous, allow_nan=False))
+    new = json.loads(json.dumps(current, allow_nan=False))
+    differences = []
+
+    def visit(left, right, path: str) -> None:
+        if isinstance(left, dict) and isinstance(right, dict):
+            for key in sorted(left.keys() | right.keys()):
+                location = f"{path}.{key}" if path else key
+                if key not in left or key not in right:
+                    differences.append({"field": location, "previous": left.get(key, "<missing>"),
+                                        "current": right.get(key, "<missing>"),
+                                        "compatible": False})
+                else:
+                    visit(left[key], right[key], location)
+            return
+        if left == right and type(left) is type(right):
+            return
+        field = path.rsplit(".", 1)[-1]
+        compatible = (field in _ALLOCATION_IDENTIFIERS and
+                      type(left) in (str, int) and type(right) is type(left))
+        if field == "gpu_total_memory_bytes":
+            compatible = (type(left) is int and type(right) is int and left > 0 and right > 0
+                          and abs(left - right) <= _MAX_GPU_MEMORY_DIFFERENCE_BYTES)
+        differences.append({"field": path, "previous": left, "current": right,
+                            "compatible": compatible})
+
+    visit(old, new, "")
+    return {"compatible": all(item["compatible"] for item in differences),
+            "differences": differences}
 
 
 def now_utc() -> str:

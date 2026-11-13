@@ -26,7 +26,8 @@ from .support_policy import (ACTION_TRAJECTORY, LEGACY_ACTION_MEMORY, RECONSIDER
                              SupportPolicy, TurnContext, make_support_policy, selection_decision)
 from .supports import build_builtin_resources, load_builtin_artifacts, make_supports
 from .trajectory_memory import POLICY as TRAJECTORY_POLICY, TrajectoryMemory
-from .run_store import audit_partitions, checked_run_key, checkpoint, episode_filename, git_state, now_utc, verify_resume
+from .run_store import (audit_partitions, checked_run_key, checkpoint, compare_model_metadata,
+                        episode_filename, git_state, now_utc, verify_resume)
 
 
 class PreemptionRequested(Exception):
@@ -767,12 +768,29 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         actual_model = model if model is not None else make_model(config)
         if config.get("schema_version") == 2:
             model_metadata = actual_model.metadata()
-            if (model_metadata.get("model_id") != config["model_id"] or
-                    model_metadata.get("model_revision") != config["model_revision"]):
-                raise ValueError("Loaded model identity or revision differs from configuration")
-            if resuming and metadata.get("model_metadata") not in (None, model_metadata):
-                raise ValueError("Resumed model runtime differs from prior process")
-            metadata["model_metadata"] = model_metadata
+            previous_runtime = metadata.get("model_metadata")
+            check = (compare_model_metadata(previous_runtime, model_metadata)
+                     if resuming and previous_runtime is not None else
+                     {"compatible": True, "differences": []})
+            for field in ("model_id", "model_revision"):
+                if model_metadata.get(field) != config[field]:
+                    check["differences"].append({"field": field, "previous": config[field],
+                                                 "current": model_metadata.get(field),
+                                                 "compatible": False,
+                                                 "source": "configured_model_identity"})
+                    check["compatible"] = False
+            metadata.setdefault("runtime_attempts", []).append({
+                "at_utc": now_utc(), "resume": resuming, "model_metadata": model_metadata,
+                "compatibility_check": check})
+            if previous_runtime is None and check["compatible"]:
+                metadata["model_metadata"] = model_metadata
+            write_json_atomic(directory / "run.json", metadata)
+            if not check["compatible"]:
+                rejected = [item for item in check["differences"] if not item["compatible"]]
+                details = "; ".join(f"{item['field']}: previous={item['previous']!r}, "
+                                    f"current={item['current']!r}" for item in rejected)
+                raise ValueError(f"Resumed model runtime differs from prior process: {details}" if resuming
+                                 else f"Loaded model identity or revision differs from configuration: {details}")
         if hasattr(actual_model, "torch"):
             metadata["gpu_name"] = actual_model.torch.cuda.get_device_name()
             metadata["torch_cuda_version"] = actual_model.torch.version.cuda

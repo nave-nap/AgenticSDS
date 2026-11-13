@@ -66,6 +66,8 @@ class QwenModel:
                 "quantization": "nf4_4bit", "chat_template": "tokenizer",
                 "decoding": {"do_sample": False, "max_new_tokens": self.max_new_tokens},
                 "gpu_name": self.torch.cuda.get_device_name(),
+                "gpu_compute_capability": list(self.torch.cuda.get_device_capability()),
+                "gpu_total_memory_bytes": self.torch.cuda.get_device_properties(0).total_memory,
                 "torch_cuda_version": self.torch.version.cuda}
 
     def count_tokens(self, text: str) -> int:

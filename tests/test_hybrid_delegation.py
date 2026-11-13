@@ -294,13 +294,25 @@ def test_configs_validate_and_match_worker_settings():
 
 def test_resume_keeps_completed_hybrid_episode_immutable(tmp_path):
     item = read_json("configs/hybrid_textcraft_dev_smoke_always.json")
+    class AllocationModels(Models):
+        def __init__(self, memory_bytes, **kwargs):
+            super().__init__(**kwargs)
+            self.memory_bytes = memory_bytes
+
+        def metadata(self):
+            value = super().metadata()
+            value["workers"]["delegated"]["metadata"].update(
+                gpu_name="NVIDIA L40S", gpu_compute_capability=[8, 9],
+                gpu_total_memory_bytes=self.memory_bytes, backend_version="5.22.2")
+            return value
+
     class DoneEpisode(Episode):
         def step(self, action):
             result = super().step(action)
             result.update(done=True, success=True)
             return result
     factory = lambda *args: DoneEpisode()
-    first = Models(fail_on=2)
+    first = AllocationModels(47_676_129_280, fail_on=2)
     root = tmp_path / "runs"
     with pytest.raises(RuntimeError, match="simulated interruption"):
         run(item, read_json(item["manifest"]), root, limit=2, model=first,
@@ -314,13 +326,16 @@ def test_resume_keeps_completed_hybrid_episode_immutable(tmp_path):
     with pytest.raises(ValueError, match="snapshot"):
         run(changed, read_json(item["manifest"]), root, limit=2, model=Models(),
             episode_factory=factory, run_key="hybrid_test", resume=True)
-    resumed = Models()
+    resumed = AllocationModels(47_600_000_000)
     run(item, read_json(item["manifest"]), root, limit=2, model=resumed,
         episode_factory=factory, run_key="hybrid_test", resume=True)
     assert resumed.closed and resumed.seeds == [read_json(item["manifest"])["tasks"][1]["task_id"]]
     assert saved.read_bytes() == original
     meta = read_json(directory / "run.json")
     assert meta["status"] == "complete" and meta["model_metadata"]["workers"]["delegated"]["metadata"]["model_revision"]
+    assert meta["model_metadata"]["workers"]["delegated"]["metadata"]["gpu_total_memory_bytes"] == 47_676_129_280
+    assert meta["runtime_attempts"][1]["model_metadata"]["workers"]["delegated"]["metadata"]["gpu_total_memory_bytes"] == 47_600_000_000
+    assert meta["runtime_attempts"][1]["compatibility_check"]["compatible"]
     with pytest.raises(ValueError, match="complete"):
         run(changed, read_json(item["manifest"]), root, limit=2, model=Models(),
             episode_factory=factory, run_key="hybrid_test", resume=True)

@@ -45,7 +45,10 @@ def test_qwen_adapter_keeps_chat_template_greedy_decoding_and_usage():
     model.model = backend
     model.torch = SimpleNamespace(inference_mode=nullcontext,
                                   ones_like=lambda tensor: Tensor([[1, 1]]),
-                                  cuda=SimpleNamespace(get_device_name=lambda: "mock GPU"),
+                                  cuda=SimpleNamespace(get_device_name=lambda: "mock GPU",
+                                                       get_device_capability=lambda: (8, 9),
+                                                       get_device_properties=lambda _: SimpleNamespace(
+                                                           total_memory=47_676_129_280)),
                                   version=SimpleNamespace(cuda="12.8"))
     model.max_new_tokens = 32
     model.model_id = "Qwen/Qwen2.5-7B-Instruct"
@@ -61,3 +64,4 @@ def test_qwen_adapter_keeps_chat_template_greedy_decoding_and_usage():
     assert model.count_messages_tokens([]) == 2
     assert model.count_messages_tokens([{"role": "user", "content": "Choose."}]) == result["input_tokens"]
     assert model.metadata()["model_revision"] == "a" * 40
+    assert model.metadata()["gpu_compute_capability"] == [8, 9]
