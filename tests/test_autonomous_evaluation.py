@@ -134,6 +134,18 @@ def test_sequence_analysis_counts_no_support_composition_and_outcome():
         "inspect_history_v1", "reason_over_artifacts_v1"]
 
 
+def test_sequence_analysis_separates_explicit_no_support_from_fallback():
+    episode = _episode("a", False)
+    first = episode["trace"][0]["support_trace"]
+    first["events"] = [{"controller_decision": {"kind": "execute", "action": None}}]
+    assert analyze_episodes({"a": episode})["controller_chose_no_support_decisions"] == 1
+    first["events"] = []
+    first["termination_reason"] = "model_call_budget"
+    report = analyze_episodes({"a": episode})
+    assert report["no_support_decisions"] == 1
+    assert report["controller_chose_no_support_decisions"] == 0
+
+
 def test_legacy_m2_support_events_are_counted_without_inventing_wall_time():
     episode = _episode("a", True)
     record = episode["trace"][0]
@@ -244,3 +256,15 @@ def test_one_task_autonomous_and_standalone_smokes_are_operationally_matched():
         key: standalone.get(key) for key in SHARED_AGENT_KEYS}
     assert autonomous["autonomous_support"]["controller"] == "prompted_gpt_oss_v1"
     assert autonomous["autonomous_support"]["model"]["model"]["model_id"] == "openai/gpt-oss-20b"
+
+
+def test_v2_reliability_smoke_is_versioned_and_keeps_frozen_task_and_limits():
+    assert STAGE_SIZES["smoke"] == 1
+    old = resolved_config("autonomous")
+    new = resolved_config("autonomous_v2")
+    assert new["autonomous_support"]["controller"] == "prompted_gpt_oss_v2"
+    assert old["autonomous_support"]["controller"] == "prompted_gpt_oss_v1"
+    assert {key: value for key, value in new.items() if key != "autonomous_support"} == {
+        key: value for key, value in old.items() if key != "autonomous_support"}
+    assert {key: value for key, value in new["autonomous_support"].items() if key != "controller"} == {
+        key: value for key, value in old["autonomous_support"].items() if key != "controller"}

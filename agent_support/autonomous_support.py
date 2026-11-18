@@ -7,6 +7,7 @@ the benchmark environment; the caller alone validates and executes an action.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
 import time
@@ -164,6 +165,7 @@ class SupportContext:
     capabilities: tuple[dict, ...] = ()
     remaining_actions: int | None = None
     remaining_decisions: int | None = None
+    support_history: tuple[dict, ...] = ()
 
     def as_dict(self) -> dict:
         return {"benchmark": self.benchmark, "task_id": self.task_id,
@@ -177,7 +179,15 @@ class SupportContext:
                 "remaining_budget": copy.deepcopy(self.remaining_budget),
                 "capabilities": copy.deepcopy(list(self.capabilities)),
                 "remaining_actions": self.remaining_actions,
-                "remaining_decisions": self.remaining_decisions}
+                "remaining_decisions": self.remaining_decisions,
+                "support_history": copy.deepcopy(list(self.support_history))}
+
+
+def visible_state_digest(context: SupportContext) -> str:
+    """Fingerprint only evidence that an inspection capability can already see."""
+    payload = (context.task_prompt, context.observation, context.available_actions,
+               context.history)
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
 
 
 class SupportController(Protocol):
@@ -363,7 +373,7 @@ def register_support_operation(operation_id: str, factory: Callable[[dict, objec
 
 def make_support_controller(config: dict, controller_model=None) -> SupportController:
     name = config["autonomous_support"]["controller"]
-    if name == "prompted_gpt_oss_v1":
+    if name in {"prompted_gpt_oss_v1", "prompted_gpt_oss_v2"}:
         from . import llm_support_controller  # Register the isolated baseline.
     if name in {"random_single_support_v1", "fixed_reasoning_v1"}:
         from . import autonomous_evaluation_baselines
@@ -449,7 +459,9 @@ def run_support_loop(controller: SupportController, executor: SupportExecutor,
                     event["action_revision"] = {"from": current.current_action, "to": parsed}
                     trace.final_action = parsed
                 trace.events.append(event)
-                trace.termination_reason = ("controller_backend_error" if response.metadata.get("backend_error")
+                trace.termination_reason = ("redundant_empty_request"
+                                            if response.metadata.get("blocked_repeated_empty_request") else
+                                            "controller_backend_error" if response.metadata.get("backend_error")
                                             else "malformed_controller_output"
                                             if response.metadata.get("parse_error") else "execute")
                 break
@@ -496,8 +508,13 @@ def run_support_loop(controller: SupportController, executor: SupportExecutor,
                     event["action_revision"] = {"from": current.current_action, "to": parsed}
             event["result"] = result.as_dict()
             trace.events.append(event)
+            history_entry = {"decision": context.decision, "operation": request.operation,
+                             "arguments": copy.deepcopy(request.arguments),
+                             "status": result.status,
+                             "visible_state_sha256": visible_state_digest(current)}
             current = replace(current, current_action=trace.final_action,
                               results=current.results + (copy.deepcopy(result),),
+                              support_history=(current.support_history + (history_entry,))[-16:],
                               remaining_budget=budget.remaining(operations_this_decision, depth))
             if result.status in ("error", "invalid_action"):
                 trace.termination_reason = "support_failure"

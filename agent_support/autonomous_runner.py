@@ -6,7 +6,8 @@ import time
 
 from .autonomous_support import (SupportBudget, SupportContext, SupportController,
                                  SupportExecutor, make_support_controller,
-                                 make_support_executor, run_support_loop)
+                                 make_support_executor, run_support_loop,
+                                 visible_state_digest)
 from .benchmarks import make_episode
 from .policy import alfworld_messages, parse_alfworld, parse_textcraft, textcraft_messages
 
@@ -24,6 +25,7 @@ def run_autonomous_episode(benchmark: str, task: dict, config: dict, model,
     started = time.perf_counter()
     history: list[dict] = []
     trace: list[dict] = []
+    support_history: list[dict] = []
     actions_taken = parser_errors = failed_actions = 0
     proposal_input_tokens = proposal_output_tokens = 0
     proposal_inference_seconds = 0.0
@@ -62,9 +64,18 @@ def run_autonomous_episode(benchmark: str, task: dict, config: dict, model,
                 history=tuple((item["action"], item["observation"]) for item in history),
                 decision=decision, original_action=proposal, current_action=proposal,
                 capabilities=executor.catalog(), remaining_actions=config["max_actions"] - actions_taken,
-                remaining_decisions=config["max_decisions"] - decision + 1)
+                remaining_decisions=config["max_decisions"] - decision + 1,
+                support_history=tuple(support_history[-16:]))
             before_budget = budget.as_dict()["used"]
             support_trace = run_support_loop(controller, executor, budget, context, parse)
+            state_sha = visible_state_digest(context)
+            support_history.extend(
+                {"decision": decision, "operation": event["request"]["operation"],
+                 "arguments": event["request"]["arguments"],
+                 "status": (event.get("result", {}).get("status") or event.get("blocked") or
+                            ("invalid_request" if event.get("error") else "requested")),
+                 "visible_state_sha256": state_sha}
+                for event in support_trace.events if "request" in event)
             action = support_trace.final_action
             # No capability may step the environment. Recheck the selected action
             # against the same action list and parser immediately before stepping.
@@ -158,6 +169,16 @@ def run_autonomous_episode(benchmark: str, task: dict, config: dict, model,
         "support_parse_errors": sum(
             event.get("result", {}).get("status") == "invalid_action"
             for record in trace for event in record["support_trace"]["events"]),
+        "controller_parse_errors": sum(
+            bool(event.get("controller_metadata", {}).get("parse_error"))
+            for record in trace for event in record["support_trace"]["events"]),
+        "controller_generation_failures": sum(
+            event.get("controller_metadata", {}).get("generation_status", "complete") != "complete"
+            or bool(event.get("controller_metadata", {}).get("backend_error"))
+            for record in trace for event in record["support_trace"]["events"]),
+        "invalid_support_requests": sum(
+            record["support_trace"]["termination_reason"] == "invalid_request"
+            for record in trace),
         "retrieval_seconds": round(sum(
             event.get("result", {}).get("metadata", {}).get("retrieval_seconds", 0.0)
             for record in trace for event in record["support_trace"]["events"]), 3),

@@ -9,7 +9,7 @@ import random
 from pathlib import Path
 
 from .analysis import load_run
-from .autonomous_evaluation import ARMS, FROZEN_MANIFEST_SHA256
+from .autonomous_evaluation import ARMS, ORIGINAL_COMPARISON_ARMS, FROZEN_MANIFEST_SHA256
 from .common import read_json, write_json_atomic
 from .support_sequence_analysis import analyze_episodes, decision_sequences
 
@@ -141,7 +141,7 @@ def _pair(left_name: str, right_name: str, task_ids: list[str],
 
 
 def compare_cohort(paths: dict[str, str | Path], require_full: bool = True) -> dict:
-    if require_full and set(paths) != set(ARMS):
+    if require_full and set(paths) != set(ORIGINAL_COMPARISON_ARMS):
         raise ValueError("Full comparison requires exactly the six predeclared arms")
     if not paths or any(name not in ARMS for name in paths):
         raise ValueError("Unknown or empty evaluation arm set")

@@ -50,6 +50,10 @@ def decision_sequences(episode: dict) -> list[dict]:
                                 record.get("proposed_action") is not None and
                                 record["action"] != record["proposed_action"]),
             "termination_reason": support.get("termination_reason"),
+            "controller_chose_no_support": (not sequence and
+                support.get("termination_reason") == "execute" and
+                any(event.get("controller_decision", {}).get("kind") == "execute"
+                    for event in events)),
             "controller_decisions": support.get("controller_decisions", 0),
             "controller_model_calls": sum(event.get("controller_cost", {}).get("model_calls", 0)
                                           for event in events),
@@ -114,6 +118,8 @@ def analyze_episodes(episodes: dict[str, dict]) -> dict:
         "tasks": len(episodes), "decisions": len(decisions),
         "no_support_decisions": length_counts[0],
         "no_support_fraction": length_counts[0] / len(decisions) if decisions else None,
+        "controller_chose_no_support_decisions": sum(row["controller_chose_no_support"]
+                                                     for row in decisions),
         "multi_support_decisions": sum(row["length"] > 1 for row in decisions),
         "action_replacements": sum(row["action_replaced"] for row in decisions),
         "capability_counts": dict(sorted(capability_counts.items())),

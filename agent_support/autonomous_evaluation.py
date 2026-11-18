@@ -20,7 +20,8 @@ REPO = Path(__file__).resolve().parent.parent
 MANIFEST = REPO / "manifests/textcraft/development.json"
 CONFIGS = REPO / "configs/autonomous_evaluation"
 ARMS = ("qwen_standalone", "qwen_reconsideration", "qwen_m2_200",
-        "random_support", "autonomous", "fixed_reasoning_2")
+        "random_support", "autonomous", "fixed_reasoning_2", "autonomous_v2")
+ORIGINAL_COMPARISON_ARMS = ARMS[:-1]
 STAGE_SIZES = {"smoke": 1, "pilot": 5, "full": 20}
 FROZEN_MANIFEST_SHA256 = "4ec57f36416ffe7f97b004b67d107e94750fa20b889d95f580690f4dfca4900e"
 
@@ -165,6 +166,8 @@ def make_gate(arm: str, smoke: str, pilot: str, output: str | Path,
 
 def run_stage(arm: str, stage: str, output_root: str | Path,
               smoke_run: str | None = None, gate_file: str | None = None) -> Path:
+    if arm == "autonomous_v2" and stage != "smoke":
+        raise ValueError("The v2 reliability configuration is approved for one-task smoke only")
     commit = require_clean_commit()
     checks = preflight(arm)
     current_runtime = package_versions()
@@ -190,7 +193,7 @@ def run_stage(arm: str, stage: str, output_root: str | Path,
             raise ValueError("Full-run gate differs from the current frozen protocol")
         checked_stage_run(gate["smoke"]["run_path"], arm, "smoke")
         checked_stage_run(gate["pilot"]["run_path"], arm, "pilot")
-        for companion_arm in ARMS:
+        for companion_arm in ORIGINAL_COMPARISON_ARMS:
             companion_path = Path(gate_file).parent / f"{companion_arm}.json"
             companion = read_json(companion_path)
             if (companion.get("arm") != companion_arm or

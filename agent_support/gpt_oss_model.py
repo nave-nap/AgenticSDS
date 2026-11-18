@@ -294,5 +294,10 @@ class GptOss20BModel:
                                            int(self.torch.cuda.max_memory_reserved(0)))
         return {**parsed, "input_tokens": int(input_ids.shape[1]),
                 "output_tokens": len(generated_ids), "inference_seconds": elapsed,
+                "generation_prompt_tail": self.tokenizer.decode(input_ids[0][-32:].tolist(),
+                                                                  skip_special_tokens=False),
+                "last_generated_token_id": generated_ids[-1] if generated_ids else None,
+                "stopped_by_final_return": bool(generated_ids and generated_ids[-1] == self.return_token_id),
+                "hit_token_limit": len(generated_ids) >= limit,
                 "peak_gpu_memory_allocated_bytes": self.peak_gpu_memory_bytes,
                 "peak_gpu_memory_reserved_bytes": self.peak_gpu_reserved_bytes}

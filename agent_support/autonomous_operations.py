@@ -192,6 +192,7 @@ class ReasonOverArtifacts:
         if model is None:
             raise ValueError("reason_over_artifacts requires a counted model backend")
         self.model = model
+        self.include_support_history = config["autonomous_support"]["controller"] == "prompted_gpt_oss_v2"
         self.max_new_tokens = config["autonomous_support"].get("support_max_new_tokens", 256)
         if type(self.max_new_tokens) is not int or self.max_new_tokens <= 0:
             raise ValueError("support_max_new_tokens must be positive")
@@ -209,6 +210,8 @@ class ReasonOverArtifacts:
     def _messages(self, arguments: dict, context: SupportContext) -> list[dict]:
         state = context.as_dict()
         state.pop("task_id", None)
+        if not self.include_support_history:
+            state.pop("support_history", None)
         state["history"] = state["history"][-8:]
         state["requested_analysis"] = arguments
         system = ("Analyze the supplied task state and evidence for the stated objective. "

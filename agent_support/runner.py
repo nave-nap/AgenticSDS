@@ -309,6 +309,9 @@ def summarize(episodes: list[dict]) -> dict:
         for key in ("controller_model_calls", "controller_input_tokens", "controller_output_tokens",
                     "proposal_model_calls", "proposal_input_tokens", "proposal_output_tokens"):
             summary[key] = sum(item[key] for item in episodes)
+        for key in ("controller_parse_errors", "controller_generation_failures",
+                    "invalid_support_requests"):
+            summary[key] = sum(item.get(key, 0) for item in episodes)
         for key in ("controller_inference_seconds", "support_inference_seconds",
                     "proposal_inference_seconds", "environment_seconds"):
             summary[key] = round(sum(item[key] for item in episodes), 3)

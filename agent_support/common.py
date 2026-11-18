@@ -152,7 +152,7 @@ def validate_config(config: dict, benchmark: str) -> None:
                     type(gate.get("minimum_effect")) not in (int, float) or
                     not math.isfinite(gate["minimum_effect"])):
                 raise ValueError("Learned gate requires a pinned artifact and finite threshold")
-        if (spec["controller"] in {"prompted_gpt_oss_v1", "fixed_reasoning_v1"} or
+        if (spec["controller"] in {"prompted_gpt_oss_v1", "prompted_gpt_oss_v2", "fixed_reasoning_v1"} or
                 "reason_over_artifacts_v1" in names):
             model_spec = spec.get("model")
             if not isinstance(model_spec, dict) or model_spec.get("type") != "gpt_oss_20b_worker_v1":

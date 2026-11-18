@@ -35,6 +35,7 @@ ALLOWED_STATE_KEYS = {"benchmark", "task_prompt", "observation", "available_acti
 def visible_state(context: SupportContext) -> dict:
     value = context.as_dict()
     value.pop("task_id", None)
+    value.pop("support_history", None)  # The frozen gate feature schema is unchanged.
     return value
 
 
