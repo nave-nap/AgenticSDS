@@ -321,14 +321,22 @@ def summarize(episodes: list[dict]) -> dict:
 
 def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None = None, model=None,
         episode_factory=make_episode, support_controller_factory=None,
-        support_executor_factory=None, controller_model=None) -> Path:
+        support_executor_factory=None, controller_model=None,
+        task_indices: list[int] | None = None) -> Path:
     validate_manifest(manifest)
     validate_config(config, manifest["benchmark"])
     selected_policy = (None if config["condition"] in AUTONOMOUS_CONDITIONS
                        else make_support_policy(config))
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive")
-    selected = manifest["tasks"][:limit] if limit is not None else manifest["tasks"]
+    if task_indices is not None:
+        if (limit is not None or not task_indices or
+                any(type(i) is not int or i < 0 or i >= len(manifest["tasks"])
+                    for i in task_indices) or task_indices != sorted(set(task_indices))):
+            raise ValueError("task_indices must be distinct ascending in-range indices, without limit")
+        selected = [manifest["tasks"][i] for i in task_indices]
+    else:
+        selected = manifest["tasks"][:limit] if limit is not None else manifest["tasks"]
     legacy_memory = "memory_corpus" in config
     trajectory_memory = "trajectory_corpus" in config
     legacy_corpus = legacy_index = trajectory_corpus = trajectory_index = None
@@ -421,6 +429,8 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         "package_versions": package_versions(),
         "started_utc": datetime.now(timezone.utc).isoformat(),
     }
+    if task_indices is not None:
+        metadata["task_indices"] = task_indices
     if config["condition"] != "baseline":
         if selected_policy is None:
             metadata["autonomous_support"] = config["autonomous_support"]
