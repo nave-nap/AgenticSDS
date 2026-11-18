@@ -1,0 +1,57 @@
+{
+  "benchmark": "textcraft",
+  "condition": "autonomous_support_v3",
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "model_revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+  "quantization": "nf4_4bit",
+  "max_actions": 30,
+  "max_decisions": 30,
+  "history_window": 8,
+  "max_new_tokens": 100,
+  "seed": 42,
+  "autonomous_support": {
+    "controller": "prompted_gpt_oss_v3",
+    "operations": [
+      "retrieve_episodic_memory_v1",
+      "inspect_history_v1",
+      "reason_over_artifacts_v1",
+      "inspect_state_v1"
+    ],
+    "support_max_new_tokens": 512,
+    "model": {
+      "type": "gpt_oss_20b_worker_v1",
+      "python_env": "AGENT_SUPPORT_GPTOSS_PYTHON",
+      "hf_home_env": "AGENT_SUPPORT_GPTOSS_HF_HOME",
+      "timeout_seconds": 1800,
+      "model": {
+        "model_id": "openai/gpt-oss-20b",
+        "model_revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+        "backend_version": "5.22.2",
+        "reasoning_effort": "low",
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": 0,
+        "max_new_tokens": 1024,
+        "prompt_date": "2026-11-18",
+        "seed": 42,
+        "completion_parser": "harmony_final_v3"
+      }
+    },
+    "budget": {
+      "max_operations_per_decision": 4,
+      "max_operations_per_task": 12,
+      "max_additional_model_calls": 30,
+      "max_additional_tokens": 120000,
+      "max_depth": 5
+    },
+    "memory": {
+      "corpus_path": "~/agent_support_data/m2_200/corpus_200.json",
+      "index_path": "~/agent_support_data/m2_200/index_200.json",
+      "expected_trajectories": 200,
+      "max_top_k": 3,
+      "max_result_tokens": 1200,
+      "corpus_sha256": "96a06b5e6436c20af36cd15e20241e9eb53ee37a9b9aff43a962266c9f884556",
+      "index_sha256": "0571341cbbd55b9e70cabc715f819426e720cde391563dbae8512618c5d5212b"
+    }
+  }
+}
