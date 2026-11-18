@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.metadata
 import hashlib
 import random
+import re
 import time
 
 from packaging.version import Version
@@ -19,6 +20,15 @@ FINAL_MARKER = "<|channel|>final<|message|>"
 ANALYSIS_MARKER = "<|channel|>analysis<|message|>"
 RETURN_TOKEN = "<|return|>"
 END_TOKEN = "<|end|>"
+CONSTRAIN_TOKEN = "<|constrain|>"
+
+
+_FINAL_MESSAGE_V3 = re.compile(
+    r"\A(?:<\|channel\|>analysis<\|message\|>(?P<analysis>.*?)<\|end\|>)?"
+    r"<\|start\|>assistant<\|channel\|>final"
+    r"(?P<format> <\|constrain\|>(?:json|JSON|schema))?"
+    r"<\|message\|>(?P<body>.*?)<\|return\|>\Z", re.DOTALL)
+_STRUCTURAL_TOKEN = re.compile(r"<\|[^<>]{1,64}\|>")
 
 
 def check_mxfp4_dependencies(backend_version: str, version_lookup=importlib.metadata.version) -> dict:
@@ -189,6 +199,67 @@ def parse_harmony_completion(tokenizer, generated_ids: list[int], limit: int) ->
             "generation_error": None if status == "complete" else status}
 
 
+def extract_decoded_final_v3(raw: str) -> dict | None:
+    """Read only a fully framed final message from decoded Harmony output.
+
+    This also supports read-only replay of saved completions without loading
+    the GPU tokenizer. Model-time acceptance additionally checks token IDs.
+    """
+    if not isinstance(raw, str):
+        return None
+    match = _FINAL_MESSAGE_V3.fullmatch(raw)
+    if match is None or _STRUCTURAL_TOKEN.search(match.group("analysis") or ""):
+        return None
+    body = match.group("body")
+    if not body.strip() or _STRUCTURAL_TOKEN.search(body):
+        return None
+    label = match.group("format")
+    if label is not None and match.group("analysis") is None:
+        return None  # The observed constrained variants followed an analysis message.
+    return {"text": body.strip(), "final_channel_format": (
+        "canonical" if label is None else "constrain_" + label.split(CONSTRAIN_TOKEN, 1)[1])}
+
+
+def parse_harmony_completion_v3(tokenizer, generated_ids: list[int], limit: int) -> dict:
+    """Accept observed constrained final headers with exact Harmony boundaries."""
+    parsed = parse_harmony_completion(tokenizer, generated_ids, limit)
+    if parsed["generation_status"] == "complete":
+        return {**parsed, "final_channel_format": "canonical", "recovered_final_channel": False}
+    if parsed["generation_status"] not in {"missing_final", "truncated_before_final"}:
+        return {**parsed, "final_channel_format": None, "recovered_final_channel": False}
+    decoded = extract_decoded_final_v3(parsed["raw_completion"])
+    if decoded and decoded["final_channel_format"] != "canonical":
+        ids = {name: tokenizer.convert_tokens_to_ids(name) for name in
+               ("<|start|>", "<|channel|>", "<|message|>", CONSTRAIN_TOKEN,
+                END_TOKEN, RETURN_TOKEN)}
+        expected = {"<|start|>": 1, "<|channel|>": 2, "<|message|>": 2,
+                    CONSTRAIN_TOKEN: 1, END_TOKEN: 1, RETURN_TOKEN: 1}
+        if (all(type(ids[name]) is int and generated_ids.count(ids[name]) == count
+                for name, count in expected.items()) and
+                generated_ids[-1] == ids[RETURN_TOKEN]):
+            message_positions = [index for index, token in enumerate(generated_ids)
+                                 if token == ids["<|message|>"]]
+            body_ids = generated_ids[message_positions[-1] + 1:-1]
+            if tokenizer.decode(body_ids, skip_special_tokens=False).strip() == decoded["text"]:
+                return {**parsed, "text": decoded["text"], "final_tokens": len(body_ids),
+                        "generation_status": "complete", "generation_error": None,
+                        "final_channel_format": decoded["final_channel_format"],
+                        "recovered_final_channel": True}
+    status = ("malformed_final_header" if CONSTRAIN_TOKEN in parsed["raw_completion"] and
+              "<|channel|>final" in parsed["raw_completion"] else parsed["generation_status"])
+    return {**parsed, "generation_status": status, "generation_error": status,
+            "final_channel_format": None, "recovered_final_channel": False}
+
+
+def parse_configured_completion(tokenizer, generated_ids: list[int], limit: int,
+                                completion_parser: str) -> dict:
+    if completion_parser == "strict_final_v1":
+        return parse_harmony_completion(tokenizer, generated_ids, limit)
+    if completion_parser == "harmony_final_v3":
+        return parse_harmony_completion_v3(tokenizer, generated_ids, limit)
+    raise ValueError("Unknown GPT-OSS completion parser")
+
+
 class GptOss20BModel:
     def __init__(self, config: dict):
         dependencies = check_mxfp4_dependencies(config["backend_version"])
@@ -209,6 +280,9 @@ class GptOss20BModel:
         self.model_id = config["model_id"]
         self.model_revision = config["model_revision"]
         self.max_new_tokens = config["max_new_tokens"]
+        self.completion_parser = config.get("completion_parser", "strict_final_v1")
+        if self.completion_parser not in {"strict_final_v1", "harmony_final_v3"}:
+            raise ValueError("Unknown GPT-OSS completion parser")
         self.reasoning_effort = config["reasoning_effort"]
         self.temperature = config["temperature"]
         self.top_p = config["top_p"]
@@ -243,6 +317,7 @@ class GptOss20BModel:
                 "quantization": "mxfp4_packed", **self.quantization_verification,
                 "chat_template": "pinned_tokenizer_harmony", "prompt_date": self.prompt_date,
                 "chat_template_sha256": hashlib.sha256(self.chat_template.encode()).hexdigest(),
+                "completion_parser": self.completion_parser,
                 "reasoning_effort": self.reasoning_effort,
                 "decoding": {"do_sample": True, "temperature": self.temperature,
                              "top_p": self.top_p, "top_k": self.top_k,
@@ -287,7 +362,8 @@ class GptOss20BModel:
         self.torch.cuda.synchronize(0)
         elapsed = round(time.perf_counter() - started, 3)
         generated_ids = output[0][input_ids.shape[1]:].tolist()
-        parsed = parse_harmony_completion(self.tokenizer, generated_ids, limit)
+        parsed = parse_configured_completion(self.tokenizer, generated_ids, limit,
+                                             self.completion_parser)
         self.peak_gpu_memory_bytes = max(self.peak_gpu_memory_bytes,
                                          int(self.torch.cuda.max_memory_allocated(0)))
         self.peak_gpu_reserved_bytes = max(self.peak_gpu_reserved_bytes,

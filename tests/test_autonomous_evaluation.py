@@ -1,6 +1,7 @@
 """CPU validation for frozen evaluation controls and comparison arithmetic."""
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -268,3 +269,75 @@ def test_v2_reliability_smoke_is_versioned_and_keeps_frozen_task_and_limits():
         key: value for key, value in old.items() if key != "autonomous_support"}
     assert {key: value for key, value in new["autonomous_support"].items() if key != "controller"} == {
         key: value for key, value in old["autonomous_support"].items() if key != "controller"}
+
+
+def test_v3_has_distinct_condition_and_pinned_parser_without_budget_changes():
+    v2 = resolved_config("autonomous_v2")
+    v3 = resolved_config("autonomous_v3")
+    assert v3["condition"] == "autonomous_support_v3"
+    assert v3["autonomous_support"]["controller"] == "prompted_gpt_oss_v3"
+    assert v3["autonomous_support"]["model"]["model"]["completion_parser"] == "harmony_final_v3"
+    assert v3["autonomous_support"]["budget"] == v2["autonomous_support"]["budget"]
+    normalized = json.loads(json.dumps(v3))
+    normalized["condition"] = "autonomous_support_v1"
+    normalized["autonomous_support"]["controller"] = "prompted_gpt_oss_v2"
+    normalized["autonomous_support"]["model"]["model"].pop("completion_parser")
+    assert normalized == v2
+    assert STAGE_SIZES["smoke"] == 1
+    from agent_support.common import validate_config
+    broken = json.loads(json.dumps(v3))
+    broken["autonomous_support"]["model"]["model"].pop("completion_parser")
+    with pytest.raises(ValueError, match="Harmony parser"):
+        validate_config(broken, "textcraft")
+    from agent_support.autonomous_evaluation import run_stage
+    with pytest.raises(ValueError, match="one-task smoke only"):
+        run_stage("autonomous_v3", "pilot", "/unused")
+
+
+def test_cli_preflight_accepts_v3_arm_and_resolves_its_config(monkeypatch, capsys):
+    from agent_support import autonomous_evaluation as evaluation
+
+    def inspect_preflight(arm):
+        config = evaluation.resolved_config(arm)
+        return {"arm": arm, "condition": config["condition"],
+                "controller": config["autonomous_support"]["controller"],
+                "completion_parser": config["autonomous_support"]["model"]["model"]["completion_parser"],
+                "smoke_tasks": evaluation.STAGE_SIZES["smoke"]}
+
+    monkeypatch.setattr(evaluation, "preflight", inspect_preflight)
+    monkeypatch.setattr(sys, "argv", ["autonomous_evaluation", "preflight", "--arm", "autonomous_v3"])
+    evaluation.main()
+    result = json.loads(capsys.readouterr().out)
+    assert result == {"arm": "autonomous_v3", "condition": "autonomous_support_v3",
+                      "controller": "prompted_gpt_oss_v3",
+                      "completion_parser": "harmony_final_v3", "smoke_tasks": 1}
+
+
+def test_v3_full_cpu_preflight_checks_frozen_manifest_and_memory():
+    result = preflight("autonomous_v3")
+    assert result["arm"] == "autonomous_v3"
+    assert result["manifest_sha256"] == canonical_digest(locked_manifest())
+    assert result["config_sha256"] == canonical_digest(resolved_config("autonomous_v3"))
+    assert result["memory_checked"] is True and result["task_count"] == 20
+
+
+def test_v3_smoke_dispatch_uses_distinct_output_directory(monkeypatch, tmp_path):
+    from agent_support import autonomous_evaluation as evaluation
+
+    captured = {}
+
+    def fake_run(config, manifest, directory, limit):
+        captured.update(config=config, manifest=manifest, directory=directory, limit=limit)
+        return directory / "textcraft_mock"
+
+    monkeypatch.setattr(evaluation, "require_clean_commit", lambda: "test-commit")
+    monkeypatch.setattr(evaluation, "preflight", lambda arm: {"arm": arm})
+    monkeypatch.setattr(evaluation, "package_versions", lambda: {})
+    monkeypatch.setattr(evaluation, "run", fake_run)
+    output = evaluation.run_stage("autonomous_v3", "smoke", tmp_path)
+
+    assert output == tmp_path / "smoke" / "autonomous_v3" / "textcraft_mock"
+    assert captured["directory"] == tmp_path / "smoke" / "autonomous_v3"
+    assert captured["config"]["condition"] == "autonomous_support_v3"
+    assert captured["manifest"] == locked_manifest()
+    assert captured["limit"] == 1

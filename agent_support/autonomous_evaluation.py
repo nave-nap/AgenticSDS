@@ -19,9 +19,9 @@ from .runner import git_commit, package_versions, run
 REPO = Path(__file__).resolve().parent.parent
 MANIFEST = REPO / "manifests/textcraft/development.json"
 CONFIGS = REPO / "configs/autonomous_evaluation"
-ARMS = ("qwen_standalone", "qwen_reconsideration", "qwen_m2_200",
-        "random_support", "autonomous", "fixed_reasoning_2", "autonomous_v2")
-ORIGINAL_COMPARISON_ARMS = ARMS[:-1]
+ORIGINAL_COMPARISON_ARMS = ("qwen_standalone", "qwen_reconsideration", "qwen_m2_200",
+                            "random_support", "autonomous", "fixed_reasoning_2")
+ARMS = ORIGINAL_COMPARISON_ARMS + ("autonomous_v2", "autonomous_v3")
 STAGE_SIZES = {"smoke": 1, "pilot": 5, "full": 20}
 FROZEN_MANIFEST_SHA256 = "4ec57f36416ffe7f97b004b67d107e94750fa20b889d95f580690f4dfca4900e"
 
@@ -166,8 +166,8 @@ def make_gate(arm: str, smoke: str, pilot: str, output: str | Path,
 
 def run_stage(arm: str, stage: str, output_root: str | Path,
               smoke_run: str | None = None, gate_file: str | None = None) -> Path:
-    if arm == "autonomous_v2" and stage != "smoke":
-        raise ValueError("The v2 reliability configuration is approved for one-task smoke only")
+    if arm in {"autonomous_v2", "autonomous_v3"} and stage != "smoke":
+        raise ValueError("The versioned reliability configurations are approved for one-task smoke only")
     commit = require_clean_commit()
     checks = preflight(arm)
     current_runtime = package_versions()

@@ -373,7 +373,7 @@ def register_support_operation(operation_id: str, factory: Callable[[dict, objec
 
 def make_support_controller(config: dict, controller_model=None) -> SupportController:
     name = config["autonomous_support"]["controller"]
-    if name in {"prompted_gpt_oss_v1", "prompted_gpt_oss_v2"}:
+    if name in {"prompted_gpt_oss_v1", "prompted_gpt_oss_v2", "prompted_gpt_oss_v3"}:
         from . import llm_support_controller  # Register the isolated baseline.
     if name in {"random_single_support_v1", "fixed_reasoning_v1"}:
         from . import autonomous_evaluation_baselines

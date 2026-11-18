@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 from .autonomous_support import (SupportBudget, SupportContext, SupportController,
-                                 SupportExecutor, make_support_controller,
+                                 SupportExecutor, SupportTrace, make_support_controller,
                                  make_support_executor, run_support_loop,
                                  visible_state_digest)
 from .benchmarks import make_episode
@@ -67,7 +67,9 @@ def run_autonomous_episode(benchmark: str, task: dict, config: dict, model,
                 remaining_decisions=config["max_decisions"] - decision + 1,
                 support_history=tuple(support_history[-16:]))
             before_budget = budget.as_dict()["used"]
-            support_trace = run_support_loop(controller, executor, budget, context, parse)
+            support_trace = (SupportTrace(None, None, termination_reason="invalid_task_proposal")
+                             if proposal is None and config["condition"] == "autonomous_support_v3" else
+                             run_support_loop(controller, executor, budget, context, parse))
             state_sha = visible_state_digest(context)
             support_history.extend(
                 {"decision": decision, "operation": event["request"]["operation"],

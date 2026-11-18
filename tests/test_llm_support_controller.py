@@ -408,6 +408,33 @@ def test_v2_next_decision_sees_prior_invalid_request():
     assert result["invalid_support_requests"] == 1
 
 
+def test_v3_skips_support_when_qwen_proposal_is_invalid(tmp_path):
+    settings = research_config()
+    settings["condition"] = "autonomous_support_v3"
+    settings["autonomous_support"]["controller"] = "prompted_gpt_oss_v3"
+    settings["autonomous_support"]["model"]["model"]["completion_parser"] = "harmony_final_v3"
+    settings["max_actions"] = settings["max_decisions"] = 1
+    validate_config(settings, "textcraft")
+    task = textcraft_task(51)
+    episode = Episode(task)
+    controller_model = CountedControllerModel([])
+    result = run_episode("textcraft", task, settings, TaskModel("Action: get 8 glass, 1 cyan dye"),
+                         episode_factory=lambda *_: episode, controller_model=controller_model)
+    assert result["parser_errors"] == 1 and result["controller_model_calls"] == 0
+    assert result["support_calls"] == 0 and result["model_calls"] == 1
+    assert episode.executed == []
+    assert result["trace"][0]["support_trace"]["termination_reason"] == "invalid_task_proposal"
+    assert result["trace"][0]["support_trace"]["events"] == []
+
+    valid_model = CountedControllerModel([decision("execute", action=None, reason="proceed")])
+    manifest = {"schema_version": 1, "benchmark": "textcraft", "partition": "development",
+                "tasks": [task]}
+    directory = run(settings, manifest, tmp_path, model=TaskModel(),
+                    episode_factory=lambda *_: Episode(task), controller_model=valid_model)
+    snapshot = json.loads((directory / "run.json").read_text())
+    assert snapshot["condition"] == "autonomous_support_v3"
+
+
 def test_controller_backend_error_recovers_with_reserved_input_count():
     class BrokenModel(CountedControllerModel):
         def __init__(self):

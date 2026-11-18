@@ -113,6 +113,8 @@ class PromptedGptOssController:
             metadata.update(raw_completion=generation.get("raw_completion"),
                             reasoning_tokens=generation.get("reasoning_tokens"),
                             final_tokens=generation.get("final_tokens"),
+                            final_channel_format=generation.get("final_channel_format"),
+                            recovered_final_channel=generation.get("recovered_final_channel"),
                             generation_prompt_tail=generation.get("generation_prompt_tail"),
                             last_generated_token_id=generation.get("last_generated_token_id"),
                             stopped_by_final_return=generation.get("stopped_by_final_return"),
@@ -221,5 +223,12 @@ class PromptedGptOssControllerV2(PromptedGptOssController):
         return response
 
 
+class PromptedGptOssControllerV3(PromptedGptOssControllerV2):
+    """Same v2 decision prompt with a versioned Harmony extraction backend."""
+
+    controller_id = "prompted_gpt_oss_v3"
+
+
 CONTROLLERS[PromptedGptOssController.controller_id] = PromptedGptOssController
 CONTROLLERS[PromptedGptOssControllerV2.controller_id] = PromptedGptOssControllerV2
+CONTROLLERS[PromptedGptOssControllerV3.controller_id] = PromptedGptOssControllerV3

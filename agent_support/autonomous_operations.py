@@ -192,7 +192,8 @@ class ReasonOverArtifacts:
         if model is None:
             raise ValueError("reason_over_artifacts requires a counted model backend")
         self.model = model
-        self.include_support_history = config["autonomous_support"]["controller"] == "prompted_gpt_oss_v2"
+        self.include_support_history = config["autonomous_support"]["controller"] in {
+            "prompted_gpt_oss_v2", "prompted_gpt_oss_v3"}
         self.max_new_tokens = config["autonomous_support"].get("support_max_new_tokens", 256)
         if type(self.max_new_tokens) is not int or self.max_new_tokens <= 0:
             raise ValueError("support_max_new_tokens must be positive")
@@ -252,6 +253,9 @@ class ReasonOverArtifacts:
         metadata = {"prompt_sha256": canonical_digest(messages),
                     "generation_status": generation.get("generation_status", "complete"),
                     "raw_output": raw[:4096]}
+        if generation.get("final_channel_format") is not None:
+            metadata["final_channel_format"] = generation["final_channel_format"]
+            metadata["recovered_final_channel"] = generation.get("recovered_final_channel", False)
         try:
             if metadata["generation_status"] != "complete":
                 raise ValueError("Incomplete model generation")

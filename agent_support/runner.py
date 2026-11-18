@@ -14,7 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .benchmarks import make_episode
-from .common import TRAJECTORY_CONDITIONS, canonical_digest, read_json, validate_config, validate_manifest, write_json_atomic
+from .common import (AUTONOMOUS_CONDITIONS, TRAJECTORY_CONDITIONS, canonical_digest,
+                     read_json, validate_config, validate_manifest, write_json_atomic)
 from .model import QwenModel
 from .policy import alfworld_messages, parse_alfworld, parse_textcraft, textcraft_messages
 from .memory import ActionMemory, RETRIEVAL_POLICY, SentenceEmbedder, support_messages
@@ -46,7 +47,7 @@ def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory
                 support_policy: SupportPolicy | None = None,
                 support_controller=None, support_executor=None,
                 controller_model=None, autonomous_memory=None) -> dict:
-    if config.get("condition") == "autonomous_support_v1":
+    if config.get("condition") in AUTONOMOUS_CONDITIONS:
         from .autonomous_runner import run_autonomous_episode
         return run_autonomous_episode(benchmark, task, config, model, episode_factory,
                                       controller=support_controller, executor=support_executor,
@@ -323,7 +324,7 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         support_executor_factory=None, controller_model=None) -> Path:
     validate_manifest(manifest)
     validate_config(config, manifest["benchmark"])
-    selected_policy = (None if config["condition"] == "autonomous_support_v1"
+    selected_policy = (None if config["condition"] in AUTONOMOUS_CONDITIONS
                        else make_support_policy(config))
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive")
@@ -356,9 +357,9 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         trajectory_index = read_json(config["trajectory_index"])
         check_memory(trajectory_corpus, check_content=True)
     autonomous_memory_spec = (config["autonomous_support"].get("memory")
-                              if config["condition"] == "autonomous_support_v1" else None)
+                              if config["condition"] in AUTONOMOUS_CONDITIONS else None)
     learned_gate_artifact = None
-    if (config["condition"] == "autonomous_support_v1" and
+    if (config["condition"] in AUTONOMOUS_CONDITIONS and
             config["autonomous_support"]["controller"] == "learned_gate_v1"):
         gate_spec = config["autonomous_support"]["learned_gate"]
         learned_gate_artifact = read_json(Path(gate_spec["artifact_path"]).expanduser())
@@ -450,7 +451,7 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
     owns_controller_model = False
     try:
         actual_model = model if model is not None else QwenModel(config)
-        if (config["condition"] == "autonomous_support_v1" and
+        if (config["condition"] in AUTONOMOUS_CONDITIONS and
                 config["autonomous_support"].get("model") is not None):
             if active_controller_model is None:
                 from .controller_backend import make_controller_model

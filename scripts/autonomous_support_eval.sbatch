@@ -20,7 +20,7 @@ if [[ "$EVAL_STAGE" == "smoke" ]]; then
   export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
   export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 fi
-if [[ "$EVAL_ARM" == "random_support" || "$EVAL_ARM" == "autonomous" || "$EVAL_ARM" == "autonomous_v2" || "$EVAL_ARM" == "fixed_reasoning_2" ]]; then
+if [[ "$EVAL_ARM" == "random_support" || "$EVAL_ARM" == "autonomous" || "$EVAL_ARM" == "autonomous_v2" || "$EVAL_ARM" == "autonomous_v3" || "$EVAL_ARM" == "fixed_reasoning_2" ]]; then
   : "${AGENT_SUPPORT_GPTOSS_PYTHON:?Set AGENT_SUPPORT_GPTOSS_PYTHON to the pinned GPT-OSS Python executable}"
   test -x "$AGENT_SUPPORT_GPTOSS_PYTHON" || { echo "GPT-OSS Python is not executable: $AGENT_SUPPORT_GPTOSS_PYTHON" >&2; exit 1; }
   export AGENT_SUPPORT_GPTOSS_HF_HOME="${AGENT_SUPPORT_GPTOSS_HF_HOME:-$HF_HOME}"

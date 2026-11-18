@@ -68,10 +68,11 @@ def validate_manifest(manifest: dict) -> None:
 
 
 TRAJECTORY_CONDITIONS = {"expel_retrieval_only_v1", "m2_trajectory_v1"}
+AUTONOMOUS_CONDITIONS = {"autonomous_support_v1", "autonomous_support_v3"}
 
 
 def validate_config(config: dict, benchmark: str) -> None:
-    if config.get("benchmark") != benchmark or config.get("condition") not in {"baseline", "m2_always", "reconsideration_only_v1", "autonomous_support_v1", *TRAJECTORY_CONDITIONS}:
+    if config.get("benchmark") != benchmark or config.get("condition") not in {"baseline", "m2_always", "reconsideration_only_v1", *AUTONOMOUS_CONDITIONS, *TRAJECTORY_CONDITIONS}:
         raise ValueError("Config benchmark or condition is invalid")
     if config.get("quantization") != "nf4_4bit":
         raise ValueError("Baseline requires NF4 4-bit quantization")
@@ -87,10 +88,12 @@ def validate_config(config: dict, benchmark: str) -> None:
     if "support_policy" in config and (not isinstance(config["support_policy"], str)
                                        or not config["support_policy"]):
         raise ValueError("support_policy must be a nonempty policy ID")
-    if config["condition"] == "autonomous_support_v1":
+    if config["condition"] in AUTONOMOUS_CONDITIONS:
         spec = config.get("autonomous_support")
         if not isinstance(spec, dict) or not isinstance(spec.get("controller"), str) or not spec["controller"]:
             raise ValueError("Autonomous support requires a controller ID")
+        if config["condition"] == "autonomous_support_v3" and spec["controller"] != "prompted_gpt_oss_v3":
+            raise ValueError("Autonomous support v3 requires the v3 controller")
         names = spec.get("operations", [])
         if not isinstance(names, list) or any(
                 not isinstance(name, str) or not name for name in names) or len(names) != len(set(names)):
@@ -152,7 +155,8 @@ def validate_config(config: dict, benchmark: str) -> None:
                     type(gate.get("minimum_effect")) not in (int, float) or
                     not math.isfinite(gate["minimum_effect"])):
                 raise ValueError("Learned gate requires a pinned artifact and finite threshold")
-        if (spec["controller"] in {"prompted_gpt_oss_v1", "prompted_gpt_oss_v2", "fixed_reasoning_v1"} or
+        if (spec["controller"] in {"prompted_gpt_oss_v1", "prompted_gpt_oss_v2",
+                                   "prompted_gpt_oss_v3", "fixed_reasoning_v1"} or
                 "reason_over_artifacts_v1" in names):
             model_spec = spec.get("model")
             if not isinstance(model_spec, dict) or model_spec.get("type") != "gpt_oss_20b_worker_v1":
@@ -178,6 +182,13 @@ def validate_config(config: dict, benchmark: str) -> None:
                     raise ValueError(f"GPT-OSS controller requires valid {key}")
             if type(worker_model.get("top_k")) is not int or worker_model["top_k"] < 0:
                 raise ValueError("GPT-OSS controller requires nonnegative top_k")
+            if config["condition"] == "autonomous_support_v3":
+                if (spec["controller"] != "prompted_gpt_oss_v3" or
+                        worker_model.get("completion_parser") != "harmony_final_v3"):
+                    raise ValueError("Autonomous support v3 requires the v3 controller and Harmony parser")
+            elif (spec["controller"] == "prompted_gpt_oss_v3" or
+                  worker_model.get("completion_parser") == "harmony_final_v3"):
+                raise ValueError("V3 controller and Harmony parser require autonomous_support_v3")
             import datetime
             try:
                 if datetime.date.fromisoformat(worker_model["prompt_date"]).isoformat() != worker_model["prompt_date"]:
