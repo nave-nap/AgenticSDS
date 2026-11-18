@@ -1,0 +1,17 @@
+{
+  "benchmark": "textcraft",
+  "condition": "m2_trajectory_v1",
+  "support_policy": "fixed_by_condition_v1",
+  "history_window": 8,
+  "max_actions": 30,
+  "max_decisions": 30,
+  "max_new_tokens": 100,
+  "trajectory_corpus": "~/agent_support_data/m2_200/corpus_200.json",
+  "trajectory_index": "~/agent_support_data/m2_200/index_200.json",
+  "trajectory_top_k": 2,
+  "trajectory_token_budget": 1800,
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "quantization": "nf4_4bit",
+  "seed": 42,
+  "model_revision": "a09a35458c702b33eeacc393d103063234e8bc28"
+}

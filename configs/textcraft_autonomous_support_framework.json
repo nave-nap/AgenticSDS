@@ -1,0 +1,22 @@
+{
+  "benchmark": "textcraft",
+  "condition": "autonomous_support_v1",
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "quantization": "nf4_4bit",
+  "max_actions": 30,
+  "max_decisions": 30,
+  "history_window": 8,
+  "max_new_tokens": 100,
+  "seed": 42,
+  "autonomous_support": {
+    "controller": "execute_immediately_v1",
+    "operations": [],
+    "budget": {
+      "max_operations_per_decision": 3,
+      "max_operations_per_task": 30,
+      "max_additional_model_calls": 30,
+      "max_additional_tokens": 100000,
+      "max_depth": 4
+    }
+  }
+}

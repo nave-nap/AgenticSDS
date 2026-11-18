@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.metadata
+import os
 import platform
 import subprocess
 import time
@@ -42,7 +43,14 @@ def git_commit() -> str | None:
 def run_episode(benchmark: str, task: dict, config: dict, model, episode_factory=make_episode,
                 support: ActionMemory | None = None,
                 trajectory_support: TrajectoryMemory | None = None,
-                support_policy: SupportPolicy | None = None) -> dict:
+                support_policy: SupportPolicy | None = None,
+                support_controller=None, support_executor=None,
+                controller_model=None, autonomous_memory=None) -> dict:
+    if config.get("condition") == "autonomous_support_v1":
+        from .autonomous_runner import run_autonomous_episode
+        return run_autonomous_episode(benchmark, task, config, model, episode_factory,
+                                      controller=support_controller, executor=support_executor,
+                                      controller_model=controller_model, memory=autonomous_memory)
     episode = episode_factory(benchmark, task, config)
     started = time.perf_counter()
     history: list[dict] = []
@@ -297,19 +305,30 @@ def summarize(episodes: list[dict]) -> dict:
         for key in ("model_calls", "support_calls", "support_model_calls", "support_input_tokens",
                     "support_output_tokens", "support_parse_errors", "retrieval_seconds", "actions_changed_by_support"):
             summary[key] = round(sum(item[key] for item in episodes), 3) if key == "retrieval_seconds" else sum(item[key] for item in episodes)
+    if episodes and "controller_model_calls" in episodes[0]:
+        for key in ("controller_model_calls", "controller_input_tokens", "controller_output_tokens",
+                    "proposal_model_calls", "proposal_input_tokens", "proposal_output_tokens"):
+            summary[key] = sum(item[key] for item in episodes)
+        for key in ("controller_inference_seconds", "support_inference_seconds",
+                    "proposal_inference_seconds", "environment_seconds"):
+            summary[key] = round(sum(item[key] for item in episodes), 3)
     return summary
 
 
-def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None = None, model=None, episode_factory=make_episode) -> Path:
+def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None = None, model=None,
+        episode_factory=make_episode, support_controller_factory=None,
+        support_executor_factory=None, controller_model=None) -> Path:
     validate_manifest(manifest)
     validate_config(config, manifest["benchmark"])
-    selected_policy = make_support_policy(config)
+    selected_policy = (None if config["condition"] == "autonomous_support_v1"
+                       else make_support_policy(config))
     if limit is not None and limit <= 0:
         raise ValueError("limit must be positive")
     selected = manifest["tasks"][:limit] if limit is not None else manifest["tasks"]
     legacy_memory = "memory_corpus" in config
     trajectory_memory = "trajectory_corpus" in config
     legacy_corpus = legacy_index = trajectory_corpus = trajectory_index = None
+    autonomous_corpus = autonomous_index = autonomous_memory = None
 
     def check_memory(corpus: dict, check_content: bool) -> None:
         if canonical_digest(manifest) not in corpus.get("excluded_manifest_sha256", {}).values():
@@ -333,6 +352,29 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         trajectory_corpus = read_json(config["trajectory_corpus"])
         trajectory_index = read_json(config["trajectory_index"])
         check_memory(trajectory_corpus, check_content=True)
+    autonomous_memory_spec = (config["autonomous_support"].get("memory")
+                              if config["condition"] == "autonomous_support_v1" else None)
+    learned_gate_artifact = None
+    if (config["condition"] == "autonomous_support_v1" and
+            config["autonomous_support"]["controller"] == "learned_gate_v1"):
+        gate_spec = config["autonomous_support"]["learned_gate"]
+        learned_gate_artifact = read_json(Path(gate_spec["artifact_path"]).expanduser())
+        if canonical_digest(learned_gate_artifact) != gate_spec["artifact_sha256"]:
+            raise ValueError("Learned gate artifact differs from configured digest")
+        from .learned_support_gate import validate_artifact
+        validate_artifact(learned_gate_artifact)
+    if autonomous_memory_spec:
+        corpus_path = Path(os.path.expanduser(autonomous_memory_spec["corpus_path"]))
+        index_path = Path(os.path.expanduser(autonomous_memory_spec["index_path"]))
+        autonomous_corpus = read_json(corpus_path)
+        autonomous_index = read_json(index_path)
+        if (canonical_digest(autonomous_corpus) != autonomous_memory_spec["corpus_sha256"] or
+                canonical_digest(autonomous_index) != autonomous_memory_spec["index_sha256"]):
+            raise ValueError("Frozen autonomous memory artifact digest differs from configuration")
+        if (autonomous_corpus.get("kind") != "successful_trajectory_retrieval_only" or
+                len(autonomous_corpus.get("records", [])) != autonomous_memory_spec["expected_trajectories"]):
+            raise ValueError("Frozen autonomous memory corpus has the wrong kind or trajectory count")
+        check_memory(autonomous_corpus, check_content=True)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
     directory = Path(output_root) / f"{manifest['benchmark']}_{run_id}"
     directory.mkdir(parents=True, exist_ok=False)
@@ -376,7 +418,10 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         "started_utc": datetime.now(timezone.utc).isoformat(),
     }
     if config["condition"] != "baseline":
-        metadata["support_policy_id"] = selected_policy.policy_id
+        if selected_policy is None:
+            metadata["autonomous_support"] = config["autonomous_support"]
+        else:
+            metadata["support_policy_id"] = selected_policy.policy_id
     if legacy_memory:
         metadata["memory_corpus_sha256"] = canonical_digest(legacy_corpus)
         metadata["memory_index_sha256"] = canonical_digest(legacy_index)
@@ -389,10 +434,28 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         metadata["trajectory_memory_selection_policy"] = TRAJECTORY_POLICY
         if config["condition"] in TRAJECTORY_CONDITIONS:
             metadata["memory_selection_policy"] = TRAJECTORY_POLICY
+    if autonomous_corpus is not None:
+        metadata["autonomous_memory_corpus_sha256"] = canonical_digest(autonomous_corpus)
+        metadata["autonomous_memory_index_sha256"] = canonical_digest(autonomous_index)
+        metadata["autonomous_memory_trajectories"] = len(autonomous_corpus["records"])
+    if learned_gate_artifact is not None:
+        metadata["learned_gate_artifact_sha256"] = canonical_digest(learned_gate_artifact)
+        write_json_atomic(directory / "learned_gate_artifact.json", learned_gate_artifact)
     write_json_atomic(directory / "run.json", metadata)
     episodes = []
+    active_controller_model = controller_model
+    owns_controller_model = False
     try:
         actual_model = model if model is not None else QwenModel(config)
+        if (config["condition"] == "autonomous_support_v1" and
+                config["autonomous_support"].get("model") is not None):
+            if active_controller_model is None:
+                from .controller_backend import make_controller_model
+                active_controller_model = make_controller_model(config, actual_model, directory / "workers")
+                owns_controller_model = active_controller_model is not actual_model
+            if hasattr(active_controller_model, "metadata"):
+                metadata["controller_model_metadata"] = active_controller_model.metadata()
+                write_json_atomic(directory / "run.json", metadata)
         if hasattr(actual_model, "torch"):
             metadata["gpu_name"] = actual_model.torch.cuda.get_device_name()
             metadata["torch_cuda_version"] = actual_model.torch.version.cuda
@@ -411,11 +474,30 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
                 MPNetEmbedder(trajectory_index["embedding_model"],
                               revision=trajectory_index.get("embedding_revision")),
                 config["trajectory_top_k"], config["trajectory_token_budget"], token_counter)
+        if autonomous_corpus is not None:
+            from .autonomous_memory import FrozenTrajectoryRetrieval
+            tokenizer = getattr(actual_model, "tokenizer", None)
+            token_counter = (lambda value: len(tokenizer.encode(value, add_special_tokens=False))
+                             if tokenizer is not None else len(value.split()))
+            autonomous_memory = FrozenTrajectoryRetrieval(
+                autonomous_corpus, autonomous_index,
+                MPNetEmbedder(autonomous_index["embedding_model"],
+                              revision=autonomous_index.get("embedding_revision")),
+                autonomous_memory_spec["max_top_k"],
+                autonomous_memory_spec["max_result_tokens"], token_counter)
         for index, task in enumerate(selected):
+            if active_controller_model is not None and hasattr(active_controller_model, "begin_episode"):
+                active_controller_model.begin_episode(task["task_id"], config.get("seed", 42))
             result = run_episode(manifest["benchmark"], task, config, actual_model,
                                  episode_factory, support=support,
                                  trajectory_support=trajectory_support,
-                                 support_policy=make_support_policy(config))
+                                 support_policy=(make_support_policy(config) if selected_policy else None),
+                                 support_controller=(support_controller_factory(config, task)
+                                                     if support_controller_factory else None),
+                                 support_executor=(support_executor_factory(config, task)
+                                                   if support_executor_factory else None),
+                                 controller_model=active_controller_model,
+                                 autonomous_memory=autonomous_memory)
             filename = f"{index:04d}_{canonical_digest(task['task_id'])[:12]}.json"
             write_json_atomic(directory / "episodes" / filename, result)
             episodes.append(result)
@@ -427,9 +509,19 @@ def run(config: dict, manifest: dict, output_root: str | Path, limit: int | None
         metadata["error"] = repr(exc)
         raise
     finally:
+        close_error = None
+        try:
+            if owns_controller_model and active_controller_model is not None:
+                active_controller_model.close()
+        except Exception as exc:
+            close_error = exc
+            metadata["status"] = "failed"
+            metadata["error"] = f"Controller worker shutdown failed: {exc!r}"
         metadata["completed_task_count"] = len(episodes)
         metadata["finished_utc"] = datetime.now(timezone.utc).isoformat()
         write_json_atomic(directory / "run.json", metadata)
+        if close_error is not None:
+            raise close_error
     return directory
 
 

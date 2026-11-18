@@ -1,0 +1,497 @@
+{
+  "immediate_execute": {
+    "source": "CPU mock controller and toy frozen-format memory; tracked TextCraft seed 130 state",
+    "executed_actions": [
+      "get 1 spruce logs"
+    ],
+    "controller_outputs": [
+      "{\"kind\": \"execute\", \"action\": null, \"reason\": \"current action is sufficient\"}"
+    ],
+    "support_trace": {
+      "original_action": "get 1 spruce logs",
+      "final_action": "get 1 spruce logs",
+      "termination_reason": "execute",
+      "operation_count": 0,
+      "controller_decisions": 1,
+      "events": [
+        {
+          "decision_state": {
+            "decision": 1,
+            "prior_support_results": 0,
+            "current_action": "get 1 spruce logs"
+          },
+          "controller_decision": {
+            "kind": "execute",
+            "reason": "current action is sufficient",
+            "action": null,
+            "request": null
+          },
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.01
+          }
+        }
+      ]
+    },
+    "controller_model_calls": 1,
+    "support_model_calls": 0,
+    "retrieval_seconds": 0.0
+  },
+  "composed_capabilities": {
+    "source": "CPU mock controller and toy frozen-format memory; tracked TextCraft seed 130 state",
+    "executed_actions": [
+      "get 1 oak logs"
+    ],
+    "controller_outputs": [
+      "{\"kind\": \"request\", \"operation\": \"retrieve_episodic_memory_v1\", \"arguments\": {\"query\": \"craft beehive resources\", \"scope\": \"both\", \"top_k\": 1}, \"objective\": \"find a relevant past task\", \"reason\": \"need evidence\"}",
+      "{\"kind\": \"request\", \"operation\": \"inspect_state_v1\", \"arguments\": {\"scope\": \"recipes\", \"limit\": 4, \"query\": \"beehive\"}, \"objective\": \"check visible recipe\", \"reason\": \"compare evidence\"}",
+      "{\"kind\": \"request\", \"operation\": \"inspect_history_v1\", \"arguments\": {\"scope\": \"failures\", \"limit\": 2}, \"objective\": \"check failures\", \"reason\": \"review recent feedback\"}",
+      "{\"kind\": \"request\", \"operation\": \"reason_over_artifacts_v1\", \"arguments\": {\"objective\": \"choose a resource action from visible evidence\", \"output_type\": \"candidate_action\"}, \"objective\": \"consider candidate\", \"reason\": \"synthesize evidence\"}",
+      "{\"kind\": \"execute\", \"action\": null, \"reason\": \"enough information\"}"
+    ],
+    "support_trace": {
+      "original_action": "get 1 spruce logs",
+      "final_action": "get 1 oak logs",
+      "termination_reason": "execute",
+      "operation_count": 4,
+      "controller_decisions": 5,
+      "events": [
+        {
+          "decision_state": {
+            "decision": 1,
+            "prior_support_results": 0,
+            "current_action": "get 1 spruce logs"
+          },
+          "controller_decision": {
+            "kind": "request",
+            "reason": "need evidence",
+            "action": null,
+            "request": {
+              "operation": "retrieve_episodic_memory_v1",
+              "arguments": {
+                "query": "craft beehive resources",
+                "scope": "both",
+                "top_k": 1
+              },
+              "objective": "find a relevant past task"
+            }
+          },
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.01
+          },
+          "request": {
+            "operation": "retrieve_episodic_memory_v1",
+            "arguments": {
+              "query": "craft beehive resources",
+              "scope": "both",
+              "top_k": 1
+            },
+            "objective": "find a relevant past task"
+          },
+          "result": {
+            "status": "ok",
+            "information": {
+              "query": "craft beehive resources",
+              "scope": "both",
+              "hits": [
+                {
+                  "memory_id": "bee-memory",
+                  "source_run_id": "frozen-training-run",
+                  "source_task_id": "training:bee",
+                  "task_prompt": "craft beehive",
+                  "similarity": 1.0,
+                  "task_similarity": 1.0,
+                  "step_similarity": 1.0,
+                  "content": "Past successful task: craft beehive\n1. Action: get 1 oak logs\n   Feedback: Got 1 oak logs",
+                  "tokens": 16
+                }
+              ],
+              "count": 1
+            },
+            "proposed_action": null,
+            "cost": {
+              "model_calls": 1,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "inference_seconds": 2.8708018362522125e-05
+            },
+            "metadata": {
+              "retrieval_seconds": 2.8708018362522125e-05,
+              "embedding_calls": 1,
+              "corpus_sha256": "159ba2caaa0d90f075b314327f100c41d4c4d02618982a4cbff3503d38b5c2ed",
+              "index_sha256": "b1346eded73f84e1960a01f44633aa6e73ab748c8eb8e3e4f7c658027975903d",
+              "retrieval_policy": "controller_query_frozen_m2_vectors_v1"
+            }
+          }
+        },
+        {
+          "decision_state": {
+            "decision": 1,
+            "prior_support_results": 1,
+            "current_action": "get 1 spruce logs"
+          },
+          "controller_decision": {
+            "kind": "request",
+            "reason": "compare evidence",
+            "action": null,
+            "request": {
+              "operation": "inspect_state_v1",
+              "arguments": {
+                "scope": "recipes",
+                "limit": 4,
+                "query": "beehive"
+              },
+              "objective": "check visible recipe"
+            }
+          },
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.01
+          },
+          "request": {
+            "operation": "inspect_state_v1",
+            "arguments": {
+              "scope": "recipes",
+              "limit": 4,
+              "query": "beehive"
+            },
+            "objective": "check visible recipe"
+          },
+          "result": {
+            "status": "ok",
+            "information": {
+              "goal": "Goal: craft beehive.",
+              "current_observation": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+              "displayed_recipes": [
+                "craft 1 beehive using 6 planks, 3 honeycomb"
+              ],
+              "matching_recipe_count": 1
+            },
+            "proposed_action": null,
+            "cost": {
+              "model_calls": 0,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "inference_seconds": 0.0
+            },
+            "metadata": {
+              "source": "visible_task_prompt_and_episode_history",
+              "no_environment_query": true
+            }
+          }
+        },
+        {
+          "decision_state": {
+            "decision": 1,
+            "prior_support_results": 2,
+            "current_action": "get 1 spruce logs"
+          },
+          "controller_decision": {
+            "kind": "request",
+            "reason": "review recent feedback",
+            "action": null,
+            "request": {
+              "operation": "inspect_history_v1",
+              "arguments": {
+                "scope": "failures",
+                "limit": 2
+              },
+              "objective": "check failures"
+            }
+          },
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.01
+          },
+          "request": {
+            "operation": "inspect_history_v1",
+            "arguments": {
+              "scope": "failures",
+              "limit": 2
+            },
+            "objective": "check failures"
+          },
+          "result": {
+            "status": "empty",
+            "information": {
+              "scope": "failures",
+              "interactions": [],
+              "count": 0,
+              "total_matches": 0
+            },
+            "proposed_action": null,
+            "cost": {
+              "model_calls": 0,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "inference_seconds": 0.0
+            },
+            "metadata": {
+              "source": "episode_history",
+              "failure_basis": "visible_feedback_text"
+            }
+          }
+        },
+        {
+          "decision_state": {
+            "decision": 1,
+            "prior_support_results": 3,
+            "current_action": "get 1 spruce logs"
+          },
+          "controller_decision": {
+            "kind": "request",
+            "reason": "synthesize evidence",
+            "action": null,
+            "request": {
+              "operation": "reason_over_artifacts_v1",
+              "arguments": {
+                "objective": "choose a resource action from visible evidence",
+                "output_type": "candidate_action"
+              },
+              "objective": "consider candidate"
+            }
+          },
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.01
+          },
+          "request": {
+            "operation": "reason_over_artifacts_v1",
+            "arguments": {
+              "objective": "choose a resource action from visible evidence",
+              "output_type": "candidate_action"
+            },
+            "objective": "consider candidate"
+          },
+          "result": {
+            "status": "ok",
+            "information": {
+              "output_type": "candidate_action",
+              "content": "Action: get 1 oak logs"
+            },
+            "proposed_action": "Action: get 1 oak logs",
+            "cost": {
+              "model_calls": 1,
+              "input_tokens": 50,
+              "output_tokens": 20,
+              "inference_seconds": 0.01
+            },
+            "metadata": {
+              "prompt_sha256": "214978c02f37d6b80618e2ec5820bbdaa836310985c716cca7a3eb364585e685",
+              "generation_status": "complete",
+              "raw_output": "{\"output_type\": \"candidate_action\", \"content\": \"Action: get 1 oak logs\"}"
+            }
+          },
+          "action_revision": {
+            "from": "get 1 spruce logs",
+            "to": "get 1 oak logs"
+          }
+        },
+        {
+          "decision_state": {
+            "decision": 1,
+            "prior_support_results": 4,
+            "current_action": "get 1 oak logs"
+          },
+          "controller_decision": {
+            "kind": "execute",
+            "reason": "enough information",
+            "action": null,
+            "request": null
+          },
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.01
+          }
+        }
+      ]
+    },
+    "controller_model_calls": 5,
+    "support_model_calls": 2,
+    "retrieval_seconds": 0.0
+  },
+  "result_dependent_choice": {
+    "source": "CPU mock controller and toy frozen-format memory; tracked TextCraft seed 130 state",
+    "executed_actions": [
+      "get 1 spruce logs"
+    ],
+    "controller_outputs": [
+      "{\"kind\": \"request\", \"operation\": \"retrieve_episodic_memory_v1\", \"arguments\": {\"query\": \"beehive\", \"scope\": \"task\", \"top_k\": 1}, \"objective\": \"find a precedent\", \"reason\": \"uncertain\"}",
+      "{\"kind\": \"request\", \"operation\": \"inspect_state_v1\", \"arguments\": {\"scope\": \"recipes\", \"limit\": 2, \"query\": \"beehive\"}, \"objective\": \"compare visible recipe\", \"reason\": \"memory found\"}",
+      "{\"kind\": \"execute\", \"action\": null, \"reason\": \"support complete\"}"
+    ],
+    "support_trace": {
+      "original_action": "get 1 spruce logs",
+      "final_action": "get 1 spruce logs",
+      "termination_reason": "execute",
+      "operation_count": 2,
+      "controller_decisions": 3,
+      "events": [
+        {
+          "decision_state": {
+            "decision": 1,
+            "prior_support_results": 0,
+            "current_action": "get 1 spruce logs"
+          },
+          "controller_decision": {
+            "kind": "request",
+            "reason": "uncertain",
+            "action": null,
+            "request": {
+              "operation": "retrieve_episodic_memory_v1",
+              "arguments": {
+                "query": "beehive",
+                "scope": "task",
+                "top_k": 1
+              },
+              "objective": "find a precedent"
+            }
+          },
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.01
+          },
+          "request": {
+            "operation": "retrieve_episodic_memory_v1",
+            "arguments": {
+              "query": "beehive",
+              "scope": "task",
+              "top_k": 1
+            },
+            "objective": "find a precedent"
+          },
+          "result": {
+            "status": "ok",
+            "information": {
+              "query": "beehive",
+              "scope": "task",
+              "hits": [
+                {
+                  "memory_id": "bee-memory",
+                  "source_run_id": "frozen-training-run",
+                  "source_task_id": "training:bee",
+                  "task_prompt": "craft beehive",
+                  "similarity": 1.0,
+                  "task_similarity": 1.0,
+                  "step_similarity": 1.0,
+                  "content": "Past successful task: craft beehive\n1. Action: get 1 oak logs\n   Feedback: Got 1 oak logs",
+                  "tokens": 16
+                }
+              ],
+              "count": 1
+            },
+            "proposed_action": null,
+            "cost": {
+              "model_calls": 1,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "inference_seconds": 2.13750172406435e-05
+            },
+            "metadata": {
+              "retrieval_seconds": 2.13750172406435e-05,
+              "embedding_calls": 1,
+              "corpus_sha256": "159ba2caaa0d90f075b314327f100c41d4c4d02618982a4cbff3503d38b5c2ed",
+              "index_sha256": "b1346eded73f84e1960a01f44633aa6e73ab748c8eb8e3e4f7c658027975903d",
+              "retrieval_policy": "controller_query_frozen_m2_vectors_v1"
+            }
+          }
+        },
+        {
+          "decision_state": {
+            "decision": 1,
+            "prior_support_results": 1,
+            "current_action": "get 1 spruce logs"
+          },
+          "controller_decision": {
+            "kind": "request",
+            "reason": "memory found",
+            "action": null,
+            "request": {
+              "operation": "inspect_state_v1",
+              "arguments": {
+                "scope": "recipes",
+                "limit": 2,
+                "query": "beehive"
+              },
+              "objective": "compare visible recipe"
+            }
+          },
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.01
+          },
+          "request": {
+            "operation": "inspect_state_v1",
+            "arguments": {
+              "scope": "recipes",
+              "limit": 2,
+              "query": "beehive"
+            },
+            "objective": "compare visible recipe"
+          },
+          "result": {
+            "status": "ok",
+            "information": {
+              "goal": "Goal: craft beehive.",
+              "current_observation": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+              "displayed_recipes": [
+                "craft 1 beehive using 6 planks, 3 honeycomb"
+              ],
+              "matching_recipe_count": 1
+            },
+            "proposed_action": null,
+            "cost": {
+              "model_calls": 0,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "inference_seconds": 0.0
+            },
+            "metadata": {
+              "source": "visible_task_prompt_and_episode_history",
+              "no_environment_query": true
+            }
+          }
+        },
+        {
+          "decision_state": {
+            "decision": 1,
+            "prior_support_results": 2,
+            "current_action": "get 1 spruce logs"
+          },
+          "controller_decision": {
+            "kind": "execute",
+            "reason": "support complete",
+            "action": null,
+            "request": null
+          },
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.01
+          }
+        }
+      ]
+    },
+    "controller_model_calls": 3,
+    "support_model_calls": 1,
+    "retrieval_seconds": 0.0
+  }
+}

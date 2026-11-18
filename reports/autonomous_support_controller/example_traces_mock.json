@@ -1,0 +1,960 @@
+{
+  "immediate_execute": {
+    "source": "CPU mock controller generations on tracked TextCraft seed 130",
+    "task_id": "textcraft:seed:130",
+    "executed_actions": [
+      "get 1 spruce logs"
+    ],
+    "controller_outputs": [
+      "{\"kind\": \"execute\", \"action\": null, \"reason\": \"current proposal is sufficient\"}"
+    ],
+    "support_trace": {
+      "original_action": "get 1 spruce logs",
+      "final_action": "get 1 spruce logs",
+      "termination_reason": "execute",
+      "events": [
+        {
+          "state": {
+            "benchmark": "textcraft",
+            "task_id": "textcraft:seed:130",
+            "task_prompt": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "observation": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "available_actions": [],
+            "history": [],
+            "decision": 1,
+            "original_action": "get 1 spruce logs",
+            "current_action": "get 1 spruce logs",
+            "results": [],
+            "remaining_budget": {
+              "operations_this_decision": 2,
+              "operations_task": 6,
+              "additional_model_calls": 20,
+              "additional_tokens": 80000,
+              "depth": 3
+            },
+            "capabilities": [
+              {
+                "operation": "inspect_history_v1",
+                "description": "Return selected recent action and feedback pairs for closer review; no environment action.",
+                "arguments": {
+                  "limit": "integer from 1 to 8"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "inspect_candidate_v1",
+                "description": "Check action format, current admissibility or displayed recipe, and repeated use; no environment action.",
+                "arguments": {
+                  "action": "candidate action string"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "reason_over_artifacts_v1",
+                "description": "Use the shared controller model to assess supplied evidence or recommend one next action; no environment action.",
+                "arguments": {
+                  "objective": "short text describing the analysis needed",
+                  "output_type": "note or candidate_action"
+                },
+                "model_calls_per_use": 1,
+                "max_output_tokens_per_use": 256
+              }
+            ],
+            "remaining_actions": 1,
+            "remaining_decisions": 1
+          },
+          "original_action": "get 1 spruce logs",
+          "controller_id": "prompted_gpt_oss_v1",
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.25
+          },
+          "controller_decision": {
+            "kind": "execute",
+            "reason": "current proposal is sufficient",
+            "action": null,
+            "request": null
+          },
+          "controller_metadata": {
+            "prompt_version": "support_decision_json_v1",
+            "prompt_sha256": "90c583911aa745ac25cda92f566ad9b44db2513de15af65eae60548c5a7d7280",
+            "raw_output": "{\"kind\": \"execute\", \"action\": null, \"reason\": \"current proposal is sufficient\"}",
+            "generation_status": "complete"
+          },
+          "controller_elapsed_seconds": 0.0
+        }
+      ],
+      "operation_count": 0,
+      "controller_decisions": 1,
+      "elapsed_seconds": 0.0,
+      "environment_outcome": {
+        "executed": true,
+        "failed_action": false,
+        "done": true,
+        "success": true
+      }
+    },
+    "controller_model_calls": 1,
+    "support_model_calls": 0
+  },
+  "sequential_support": {
+    "source": "CPU mock controller generations on tracked TextCraft seed 130",
+    "task_id": "textcraft:seed:130",
+    "executed_actions": [
+      "get 1 oak logs"
+    ],
+    "controller_outputs": [
+      "{\"kind\": \"request\", \"operation\": \"inspect_history_v1\", \"arguments\": {\"limit\": 2}, \"objective\": \"review recent feedback\", \"reason\": \"need context\"}",
+      "{\"kind\": \"request\", \"operation\": \"reason_over_artifacts_v1\", \"arguments\": {\"objective\": \"assess the next useful resource action\", \"output_type\": \"candidate_action\"}, \"objective\": \"check next action\", \"reason\": \"an assessment may help\"}",
+      "{\"kind\": \"execute\", \"action\": null, \"reason\": \"candidate is usable\"}"
+    ],
+    "support_trace": {
+      "original_action": "get 1 spruce logs",
+      "final_action": "get 1 oak logs",
+      "termination_reason": "execute",
+      "events": [
+        {
+          "state": {
+            "benchmark": "textcraft",
+            "task_id": "textcraft:seed:130",
+            "task_prompt": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "observation": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "available_actions": [],
+            "history": [],
+            "decision": 1,
+            "original_action": "get 1 spruce logs",
+            "current_action": "get 1 spruce logs",
+            "results": [],
+            "remaining_budget": {
+              "operations_this_decision": 2,
+              "operations_task": 6,
+              "additional_model_calls": 20,
+              "additional_tokens": 80000,
+              "depth": 3
+            },
+            "capabilities": [
+              {
+                "operation": "inspect_history_v1",
+                "description": "Return selected recent action and feedback pairs for closer review; no environment action.",
+                "arguments": {
+                  "limit": "integer from 1 to 8"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "inspect_candidate_v1",
+                "description": "Check action format, current admissibility or displayed recipe, and repeated use; no environment action.",
+                "arguments": {
+                  "action": "candidate action string"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "reason_over_artifacts_v1",
+                "description": "Use the shared controller model to assess supplied evidence or recommend one next action; no environment action.",
+                "arguments": {
+                  "objective": "short text describing the analysis needed",
+                  "output_type": "note or candidate_action"
+                },
+                "model_calls_per_use": 1,
+                "max_output_tokens_per_use": 256
+              }
+            ],
+            "remaining_actions": 1,
+            "remaining_decisions": 1
+          },
+          "original_action": "get 1 spruce logs",
+          "controller_id": "prompted_gpt_oss_v1",
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.25
+          },
+          "controller_decision": {
+            "kind": "request",
+            "reason": "need context",
+            "action": null,
+            "request": {
+              "operation": "inspect_history_v1",
+              "arguments": {
+                "limit": 2
+              },
+              "objective": "review recent feedback"
+            }
+          },
+          "controller_metadata": {
+            "prompt_version": "support_decision_json_v1",
+            "prompt_sha256": "90c583911aa745ac25cda92f566ad9b44db2513de15af65eae60548c5a7d7280",
+            "raw_output": "{\"kind\": \"request\", \"operation\": \"inspect_history_v1\", \"arguments\": {\"limit\": 2}, \"objective\": \"review recent feedback\", \"reason\": \"need context\"}",
+            "generation_status": "complete"
+          },
+          "controller_elapsed_seconds": 0.0,
+          "request": {
+            "operation": "inspect_history_v1",
+            "arguments": {
+              "limit": 2
+            },
+            "objective": "review recent feedback"
+          },
+          "operation_elapsed_seconds": 0.0,
+          "result": {
+            "status": "empty",
+            "information": {
+              "interactions": [],
+              "count": 0
+            },
+            "proposed_action": null,
+            "cost": {
+              "model_calls": 0,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "inference_seconds": 0.0
+            },
+            "metadata": {
+              "source": "episode_history"
+            }
+          }
+        },
+        {
+          "state": {
+            "benchmark": "textcraft",
+            "task_id": "textcraft:seed:130",
+            "task_prompt": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "observation": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "available_actions": [],
+            "history": [],
+            "decision": 1,
+            "original_action": "get 1 spruce logs",
+            "current_action": "get 1 spruce logs",
+            "results": [
+              {
+                "status": "empty",
+                "information": {
+                  "interactions": [],
+                  "count": 0
+                },
+                "proposed_action": null,
+                "cost": {
+                  "model_calls": 0,
+                  "input_tokens": 0,
+                  "output_tokens": 0,
+                  "inference_seconds": 0.0
+                },
+                "metadata": {
+                  "source": "episode_history"
+                }
+              }
+            ],
+            "remaining_budget": {
+              "operations_this_decision": 1,
+              "operations_task": 5,
+              "additional_model_calls": 19,
+              "additional_tokens": 79930,
+              "depth": 2
+            },
+            "capabilities": [
+              {
+                "operation": "inspect_history_v1",
+                "description": "Return selected recent action and feedback pairs for closer review; no environment action.",
+                "arguments": {
+                  "limit": "integer from 1 to 8"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "inspect_candidate_v1",
+                "description": "Check action format, current admissibility or displayed recipe, and repeated use; no environment action.",
+                "arguments": {
+                  "action": "candidate action string"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "reason_over_artifacts_v1",
+                "description": "Use the shared controller model to assess supplied evidence or recommend one next action; no environment action.",
+                "arguments": {
+                  "objective": "short text describing the analysis needed",
+                  "output_type": "note or candidate_action"
+                },
+                "model_calls_per_use": 1,
+                "max_output_tokens_per_use": 256
+              }
+            ],
+            "remaining_actions": 1,
+            "remaining_decisions": 1
+          },
+          "original_action": "get 1 spruce logs",
+          "controller_id": "prompted_gpt_oss_v1",
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.25
+          },
+          "controller_decision": {
+            "kind": "request",
+            "reason": "an assessment may help",
+            "action": null,
+            "request": {
+              "operation": "reason_over_artifacts_v1",
+              "arguments": {
+                "objective": "assess the next useful resource action",
+                "output_type": "candidate_action"
+              },
+              "objective": "check next action"
+            }
+          },
+          "controller_metadata": {
+            "prompt_version": "support_decision_json_v1",
+            "prompt_sha256": "839da39645402529ff421beca51b18270fee714edeaa7e13edc10e322807eab6",
+            "raw_output": "{\"kind\": \"request\", \"operation\": \"reason_over_artifacts_v1\", \"arguments\": {\"objective\": \"assess the next useful resource action\", \"output_type\": \"candidate_action\"}, \"objective\": \"check next action\", \"reason\": \"an assessment may help\"}",
+            "generation_status": "complete"
+          },
+          "controller_elapsed_seconds": 0.0,
+          "request": {
+            "operation": "reason_over_artifacts_v1",
+            "arguments": {
+              "objective": "assess the next useful resource action",
+              "output_type": "candidate_action"
+            },
+            "objective": "check next action"
+          },
+          "operation_elapsed_seconds": 0.0,
+          "action_revision": {
+            "from": "get 1 spruce logs",
+            "to": "get 1 oak logs"
+          },
+          "result": {
+            "status": "ok",
+            "information": {
+              "output_type": "candidate_action",
+              "content": "Action: get 1 oak logs"
+            },
+            "proposed_action": "Action: get 1 oak logs",
+            "cost": {
+              "model_calls": 1,
+              "input_tokens": 50,
+              "output_tokens": 20,
+              "inference_seconds": 0.25
+            },
+            "metadata": {
+              "prompt_sha256": "67c3cf87fc4399175ef5d3e195249fcae1762cdfe1ba24586ad5eb9ae96f290d",
+              "generation_status": "complete",
+              "raw_output": "{\"output_type\": \"candidate_action\", \"content\": \"Action: get 1 oak logs\"}"
+            }
+          }
+        },
+        {
+          "state": {
+            "benchmark": "textcraft",
+            "task_id": "textcraft:seed:130",
+            "task_prompt": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "observation": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "available_actions": [],
+            "history": [],
+            "decision": 1,
+            "original_action": "get 1 spruce logs",
+            "current_action": "get 1 oak logs",
+            "results": [
+              {
+                "status": "empty",
+                "information": {
+                  "interactions": [],
+                  "count": 0
+                },
+                "proposed_action": null,
+                "cost": {
+                  "model_calls": 0,
+                  "input_tokens": 0,
+                  "output_tokens": 0,
+                  "inference_seconds": 0.0
+                },
+                "metadata": {
+                  "source": "episode_history"
+                }
+              },
+              {
+                "status": "ok",
+                "information": {
+                  "output_type": "candidate_action",
+                  "content": "Action: get 1 oak logs"
+                },
+                "proposed_action": "Action: get 1 oak logs",
+                "cost": {
+                  "model_calls": 1,
+                  "input_tokens": 50,
+                  "output_tokens": 20,
+                  "inference_seconds": 0.25
+                },
+                "metadata": {
+                  "prompt_sha256": "67c3cf87fc4399175ef5d3e195249fcae1762cdfe1ba24586ad5eb9ae96f290d",
+                  "generation_status": "complete",
+                  "raw_output": "{\"output_type\": \"candidate_action\", \"content\": \"Action: get 1 oak logs\"}"
+                }
+              }
+            ],
+            "remaining_budget": {
+              "operations_this_decision": 0,
+              "operations_task": 4,
+              "additional_model_calls": 17,
+              "additional_tokens": 79790,
+              "depth": 1
+            },
+            "capabilities": [
+              {
+                "operation": "inspect_history_v1",
+                "description": "Return selected recent action and feedback pairs for closer review; no environment action.",
+                "arguments": {
+                  "limit": "integer from 1 to 8"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "inspect_candidate_v1",
+                "description": "Check action format, current admissibility or displayed recipe, and repeated use; no environment action.",
+                "arguments": {
+                  "action": "candidate action string"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "reason_over_artifacts_v1",
+                "description": "Use the shared controller model to assess supplied evidence or recommend one next action; no environment action.",
+                "arguments": {
+                  "objective": "short text describing the analysis needed",
+                  "output_type": "note or candidate_action"
+                },
+                "model_calls_per_use": 1,
+                "max_output_tokens_per_use": 256
+              }
+            ],
+            "remaining_actions": 1,
+            "remaining_decisions": 1
+          },
+          "original_action": "get 1 spruce logs",
+          "controller_id": "prompted_gpt_oss_v1",
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.25
+          },
+          "controller_decision": {
+            "kind": "execute",
+            "reason": "candidate is usable",
+            "action": null,
+            "request": null
+          },
+          "controller_metadata": {
+            "prompt_version": "support_decision_json_v1",
+            "prompt_sha256": "95406e76523206107853b8db03ed33c0bfaac3e2179b555d274f4790be6473e3",
+            "raw_output": "{\"kind\": \"execute\", \"action\": null, \"reason\": \"candidate is usable\"}",
+            "generation_status": "complete"
+          },
+          "controller_elapsed_seconds": 0.0
+        }
+      ],
+      "operation_count": 2,
+      "controller_decisions": 3,
+      "elapsed_seconds": 0.001,
+      "environment_outcome": {
+        "executed": true,
+        "failed_action": false,
+        "done": true,
+        "success": true
+      }
+    },
+    "controller_model_calls": 3,
+    "support_model_calls": 1
+  },
+  "malformed_recovery": {
+    "source": "CPU mock controller generations on tracked TextCraft seed 130",
+    "task_id": "textcraft:seed:130",
+    "executed_actions": [
+      "get 1 spruce logs"
+    ],
+    "controller_outputs": [
+      "not json"
+    ],
+    "support_trace": {
+      "original_action": "get 1 spruce logs",
+      "final_action": "get 1 spruce logs",
+      "termination_reason": "malformed_controller_output",
+      "events": [
+        {
+          "state": {
+            "benchmark": "textcraft",
+            "task_id": "textcraft:seed:130",
+            "task_prompt": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "observation": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "available_actions": [],
+            "history": [],
+            "decision": 1,
+            "original_action": "get 1 spruce logs",
+            "current_action": "get 1 spruce logs",
+            "results": [],
+            "remaining_budget": {
+              "operations_this_decision": 2,
+              "operations_task": 6,
+              "additional_model_calls": 20,
+              "additional_tokens": 80000,
+              "depth": 3
+            },
+            "capabilities": [
+              {
+                "operation": "inspect_history_v1",
+                "description": "Return selected recent action and feedback pairs for closer review; no environment action.",
+                "arguments": {
+                  "limit": "integer from 1 to 8"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "inspect_candidate_v1",
+                "description": "Check action format, current admissibility or displayed recipe, and repeated use; no environment action.",
+                "arguments": {
+                  "action": "candidate action string"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "reason_over_artifacts_v1",
+                "description": "Use the shared controller model to assess supplied evidence or recommend one next action; no environment action.",
+                "arguments": {
+                  "objective": "short text describing the analysis needed",
+                  "output_type": "note or candidate_action"
+                },
+                "model_calls_per_use": 1,
+                "max_output_tokens_per_use": 256
+              }
+            ],
+            "remaining_actions": 1,
+            "remaining_decisions": 1
+          },
+          "original_action": "get 1 spruce logs",
+          "controller_id": "prompted_gpt_oss_v1",
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.25
+          },
+          "controller_decision": {
+            "kind": "execute",
+            "reason": "malformed_controller_output",
+            "action": null,
+            "request": null
+          },
+          "controller_metadata": {
+            "prompt_version": "support_decision_json_v1",
+            "prompt_sha256": "90c583911aa745ac25cda92f566ad9b44db2513de15af65eae60548c5a7d7280",
+            "raw_output": "not json",
+            "generation_status": "complete",
+            "parse_error": "Controller output is not one JSON object"
+          },
+          "controller_elapsed_seconds": 0.0
+        }
+      ],
+      "operation_count": 0,
+      "controller_decisions": 1,
+      "elapsed_seconds": 0.0,
+      "environment_outcome": {
+        "executed": true,
+        "failed_action": false,
+        "done": true,
+        "success": true
+      }
+    },
+    "controller_model_calls": 1,
+    "support_model_calls": 0
+  },
+  "result_dependent_choice": {
+    "source": "CPU mock conditional controller on tracked TextCraft seed 130",
+    "task_id": "textcraft:seed:130",
+    "executed_actions": [
+      "get 1 spruce logs"
+    ],
+    "controller_outputs": [
+      "{\"kind\": \"request\", \"operation\": \"inspect_candidate_v1\", \"arguments\": {\"action\": \"craft 6 planks using 1 spruce logs\"}, \"objective\": \"check recipe\", \"reason\": \"uncertain\"}",
+      "{\"kind\": \"request\", \"operation\": \"inspect_history_v1\", \"arguments\": {\"limit\": 1}, \"objective\": \"review feedback\", \"reason\": \"recipe is not displayed\"}",
+      "{\"kind\": \"execute\", \"action\": null, \"reason\": \"current proposal is sufficient\"}"
+    ],
+    "support_trace": {
+      "original_action": "get 1 spruce logs",
+      "final_action": "get 1 spruce logs",
+      "termination_reason": "execute",
+      "events": [
+        {
+          "state": {
+            "benchmark": "textcraft",
+            "task_id": "textcraft:seed:130",
+            "task_prompt": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "observation": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "available_actions": [],
+            "history": [],
+            "decision": 1,
+            "original_action": "get 1 spruce logs",
+            "current_action": "get 1 spruce logs",
+            "results": [],
+            "remaining_budget": {
+              "operations_this_decision": 2,
+              "operations_task": 6,
+              "additional_model_calls": 20,
+              "additional_tokens": 80000,
+              "depth": 3
+            },
+            "capabilities": [
+              {
+                "operation": "inspect_history_v1",
+                "description": "Return selected recent action and feedback pairs for closer review; no environment action.",
+                "arguments": {
+                  "limit": "integer from 1 to 8"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "inspect_candidate_v1",
+                "description": "Check action format, current admissibility or displayed recipe, and repeated use; no environment action.",
+                "arguments": {
+                  "action": "candidate action string"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "reason_over_artifacts_v1",
+                "description": "Use the shared controller model to assess supplied evidence or recommend one next action; no environment action.",
+                "arguments": {
+                  "objective": "short text describing the analysis needed",
+                  "output_type": "note or candidate_action"
+                },
+                "model_calls_per_use": 1,
+                "max_output_tokens_per_use": 256
+              }
+            ],
+            "remaining_actions": 1,
+            "remaining_decisions": 1
+          },
+          "original_action": "get 1 spruce logs",
+          "controller_id": "prompted_gpt_oss_v1",
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.25
+          },
+          "controller_decision": {
+            "kind": "request",
+            "reason": "uncertain",
+            "action": null,
+            "request": {
+              "operation": "inspect_candidate_v1",
+              "arguments": {
+                "action": "craft 6 planks using 1 spruce logs"
+              },
+              "objective": "check recipe"
+            }
+          },
+          "controller_metadata": {
+            "prompt_version": "support_decision_json_v1",
+            "prompt_sha256": "90c583911aa745ac25cda92f566ad9b44db2513de15af65eae60548c5a7d7280",
+            "raw_output": "{\"kind\": \"request\", \"operation\": \"inspect_candidate_v1\", \"arguments\": {\"action\": \"craft 6 planks using 1 spruce logs\"}, \"objective\": \"check recipe\", \"reason\": \"uncertain\"}",
+            "generation_status": "complete"
+          },
+          "controller_elapsed_seconds": 0.0,
+          "request": {
+            "operation": "inspect_candidate_v1",
+            "arguments": {
+              "action": "craft 6 planks using 1 spruce logs"
+            },
+            "objective": "check recipe"
+          },
+          "operation_elapsed_seconds": 0.0,
+          "result": {
+            "status": "ok",
+            "information": {
+              "parsed_action": "craft 6 planks using 1 spruce logs",
+              "format_valid": true,
+              "admissible": true,
+              "displayed_recipe": false,
+              "prior_same_action_count": 0
+            },
+            "proposed_action": null,
+            "cost": {
+              "model_calls": 0,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "inference_seconds": 0.0
+            },
+            "metadata": {
+              "scope": "syntax_and_visible_state_only"
+            }
+          }
+        },
+        {
+          "state": {
+            "benchmark": "textcraft",
+            "task_id": "textcraft:seed:130",
+            "task_prompt": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "observation": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "available_actions": [],
+            "history": [],
+            "decision": 1,
+            "original_action": "get 1 spruce logs",
+            "current_action": "get 1 spruce logs",
+            "results": [
+              {
+                "status": "ok",
+                "information": {
+                  "parsed_action": "craft 6 planks using 1 spruce logs",
+                  "format_valid": true,
+                  "admissible": true,
+                  "displayed_recipe": false,
+                  "prior_same_action_count": 0
+                },
+                "proposed_action": null,
+                "cost": {
+                  "model_calls": 0,
+                  "input_tokens": 0,
+                  "output_tokens": 0,
+                  "inference_seconds": 0.0
+                },
+                "metadata": {
+                  "scope": "syntax_and_visible_state_only"
+                }
+              }
+            ],
+            "remaining_budget": {
+              "operations_this_decision": 1,
+              "operations_task": 5,
+              "additional_model_calls": 19,
+              "additional_tokens": 79930,
+              "depth": 2
+            },
+            "capabilities": [
+              {
+                "operation": "inspect_history_v1",
+                "description": "Return selected recent action and feedback pairs for closer review; no environment action.",
+                "arguments": {
+                  "limit": "integer from 1 to 8"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "inspect_candidate_v1",
+                "description": "Check action format, current admissibility or displayed recipe, and repeated use; no environment action.",
+                "arguments": {
+                  "action": "candidate action string"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "reason_over_artifacts_v1",
+                "description": "Use the shared controller model to assess supplied evidence or recommend one next action; no environment action.",
+                "arguments": {
+                  "objective": "short text describing the analysis needed",
+                  "output_type": "note or candidate_action"
+                },
+                "model_calls_per_use": 1,
+                "max_output_tokens_per_use": 256
+              }
+            ],
+            "remaining_actions": 1,
+            "remaining_decisions": 1
+          },
+          "original_action": "get 1 spruce logs",
+          "controller_id": "prompted_gpt_oss_v1",
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.25
+          },
+          "controller_decision": {
+            "kind": "request",
+            "reason": "recipe is not displayed",
+            "action": null,
+            "request": {
+              "operation": "inspect_history_v1",
+              "arguments": {
+                "limit": 1
+              },
+              "objective": "review feedback"
+            }
+          },
+          "controller_metadata": {
+            "prompt_version": "support_decision_json_v1",
+            "prompt_sha256": "e9f2839b77751ed60e822ff3c307a45657bf46928bff18d514775551dcbad226",
+            "raw_output": "{\"kind\": \"request\", \"operation\": \"inspect_history_v1\", \"arguments\": {\"limit\": 1}, \"objective\": \"review feedback\", \"reason\": \"recipe is not displayed\"}",
+            "generation_status": "complete"
+          },
+          "controller_elapsed_seconds": 0.0,
+          "request": {
+            "operation": "inspect_history_v1",
+            "arguments": {
+              "limit": 1
+            },
+            "objective": "review feedback"
+          },
+          "operation_elapsed_seconds": 0.0,
+          "result": {
+            "status": "empty",
+            "information": {
+              "interactions": [],
+              "count": 0
+            },
+            "proposed_action": null,
+            "cost": {
+              "model_calls": 0,
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "inference_seconds": 0.0
+            },
+            "metadata": {
+              "source": "episode_history"
+            }
+          }
+        },
+        {
+          "state": {
+            "benchmark": "textcraft",
+            "task_id": "textcraft:seed:130",
+            "task_prompt": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "observation": "Crafting commands:\ncraft 4 spruce planks using 1 spruce logs\ncraft 4 warped planks using 1 warped stems\ncraft 1 purple bed using 3 purple wool, 3 planks\ncraft 4 birch planks using 1 birch logs\ncraft 1 honeycomb block using 4 honeycomb\ncraft 1 shield using 6 planks, 1 iron ingot\ncraft 1 jukebox using 8 planks, 1 diamond\ncraft 1 pink bed using 3 pink wool, 3 planks\ncraft 1 wooden pickaxe using 2 stick, 3 planks\ncraft 1 cyan bed using 3 cyan wool, 3 planks\ncraft 1 lime bed using 3 lime wool, 3 planks\ncraft 4 acacia planks using 1 acacia logs\ncraft 4 crimson planks using 1 crimson stems\ncraft 1 beehive using 6 planks, 3 honeycomb\ncraft 1 loom using 2 planks, 2 string\ncraft 4 jungle planks using 1 jungle logs\ncraft 1 gray bed using 3 gray wool, 3 planks\ncraft 4 dark oak planks using 1 dark oak logs\ncraft 4 oak planks using 1 oak logs\n\nGoal: craft beehive.",
+            "available_actions": [],
+            "history": [],
+            "decision": 1,
+            "original_action": "get 1 spruce logs",
+            "current_action": "get 1 spruce logs",
+            "results": [
+              {
+                "status": "ok",
+                "information": {
+                  "parsed_action": "craft 6 planks using 1 spruce logs",
+                  "format_valid": true,
+                  "admissible": true,
+                  "displayed_recipe": false,
+                  "prior_same_action_count": 0
+                },
+                "proposed_action": null,
+                "cost": {
+                  "model_calls": 0,
+                  "input_tokens": 0,
+                  "output_tokens": 0,
+                  "inference_seconds": 0.0
+                },
+                "metadata": {
+                  "scope": "syntax_and_visible_state_only"
+                }
+              },
+              {
+                "status": "empty",
+                "information": {
+                  "interactions": [],
+                  "count": 0
+                },
+                "proposed_action": null,
+                "cost": {
+                  "model_calls": 0,
+                  "input_tokens": 0,
+                  "output_tokens": 0,
+                  "inference_seconds": 0.0
+                },
+                "metadata": {
+                  "source": "episode_history"
+                }
+              }
+            ],
+            "remaining_budget": {
+              "operations_this_decision": 0,
+              "operations_task": 4,
+              "additional_model_calls": 18,
+              "additional_tokens": 79860,
+              "depth": 1
+            },
+            "capabilities": [
+              {
+                "operation": "inspect_history_v1",
+                "description": "Return selected recent action and feedback pairs for closer review; no environment action.",
+                "arguments": {
+                  "limit": "integer from 1 to 8"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "inspect_candidate_v1",
+                "description": "Check action format, current admissibility or displayed recipe, and repeated use; no environment action.",
+                "arguments": {
+                  "action": "candidate action string"
+                },
+                "model_calls_per_use": 0,
+                "max_output_tokens_per_use": 0
+              },
+              {
+                "operation": "reason_over_artifacts_v1",
+                "description": "Use the shared controller model to assess supplied evidence or recommend one next action; no environment action.",
+                "arguments": {
+                  "objective": "short text describing the analysis needed",
+                  "output_type": "note or candidate_action"
+                },
+                "model_calls_per_use": 1,
+                "max_output_tokens_per_use": 256
+              }
+            ],
+            "remaining_actions": 1,
+            "remaining_decisions": 1
+          },
+          "original_action": "get 1 spruce logs",
+          "controller_id": "prompted_gpt_oss_v1",
+          "controller_cost": {
+            "model_calls": 1,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "inference_seconds": 0.25
+          },
+          "controller_decision": {
+            "kind": "execute",
+            "reason": "current proposal is sufficient",
+            "action": null,
+            "request": null
+          },
+          "controller_metadata": {
+            "prompt_version": "support_decision_json_v1",
+            "prompt_sha256": "f683c45247d2af95093eea31165042bf05461685f283b1d9623940bdcdeac780",
+            "raw_output": "{\"kind\": \"execute\", \"action\": null, \"reason\": \"current proposal is sufficient\"}",
+            "generation_status": "complete"
+          },
+          "controller_elapsed_seconds": 0.0
+        }
+      ],
+      "operation_count": 2,
+      "controller_decisions": 3,
+      "elapsed_seconds": 0.001,
+      "environment_outcome": {
+        "executed": true,
+        "failed_action": false,
+        "done": true,
+        "success": true
+      }
+    },
+    "controller_model_calls": 3,
+    "support_model_calls": 0
+  }
+}
