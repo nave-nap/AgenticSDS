@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "benchmark": "textcraft",
+  "max_actions": 30,
+  "max_decisions": 30,
+  "history_window": 8,
+  "seed": 42,
+  "gpt_oss": {
+    "type": "gpt_oss_20b_worker_v1",
+    "python_env": "AGENT_SUPPORT_GPTOSS_PYTHON",
+    "hf_home_env": "AGENT_SUPPORT_GPTOSS_HF_HOME",
+    "timeout_seconds": 1800,
+    "model": {
+      "model_id": "openai/gpt-oss-20b",
+      "model_revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+      "backend_version": "5.22.2",
+      "reasoning_effort": "low",
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "top_k": 0,
+      "max_new_tokens": 1024,
+      "prompt_date": "2026-11-18",
+      "seed": 42,
+      "completion_parser": "harmony_final_v3"
+    }
+  },
+  "arm": "gptoss_review_only_v1",
+  "qwen": {
+    "model_id": "Qwen/Qwen2.5-7B-Instruct",
+    "model_revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+    "quantization": "nf4_4bit",
+    "max_new_tokens": 100,
+    "seed": 42
+  }
+}
