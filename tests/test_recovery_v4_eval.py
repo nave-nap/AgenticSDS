@@ -4,6 +4,13 @@ from agent_support import recovery_v4_eval as evaluation
 from agent_support.common import canonical_digest
 
 
+def test_repaired_preflight_checks_protocol_without_gpu():
+    result = evaluation.preflight("autonomous_recovery_v4")
+    assert result["recovery_integration_version"] == "autonomous_recovery_v4_repair_v1"
+    assert all(result["protocol_checks"].values())
+    assert result["task_count"] == 30
+
+
 def test_resume_selects_only_missing_tasks(monkeypatch, tmp_path):
     arm = "autonomous_recovery_v4"
     tasks = evaluation.manifest()["tasks"]

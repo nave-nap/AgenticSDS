@@ -17,19 +17,20 @@ from .benchmarks import make_episode
 from .policy import parse_textcraft, textcraft_messages
 
 ARMS = ("expanded_v3_v1", "autonomous_recovery_v4")
+REPAIR_VERSION = "autonomous_recovery_v4_repair_v1"
 STATE_FIELDS = ("subgoal", "strategy", "plan", "hypotheses", "uncertainties",
                 "attempted_approaches", "expected_outcome")
 ASSESSMENTS = {"progressed", "stalled", "contradicted", "uncertain", "not_applicable"}
 MAX_TEXT = 400
 MAX_LIST = 8
 SYSTEM = """You are the adaptive TextCraft recovery controller. Decide autonomously whether to act, revise Qwen's action, investigate with a listed support, update your strategy, or stop. No support is mandatory. Use only visible task evidence and listed supports; no simulator or hidden state access. The environment alone verifies success. Treat your hypotheses, plans, and predictions as interpretations, not verified facts. Examine the prior prediction and observed feedback, then set progress_assessment using visible evidence. After a support result, judge its usefulness and decide whether it resolved your uncertainty. Return exactly one JSON object in the final channel, no markdown or extra keys.
-Required keys in every response: kind, reason, state_update, progress_assessment, progress_evidence, support_assessment.
+Required key: kind. Include reason, state_update, progress_assessment, progress_evidence, and support_assessment when you have evidence to report; omitted fields keep their current state.
 kind is execute, request, reflect, or stop.
-For execute: include action (null keeps the current candidate; otherwise one native get/craft/inventory command) and expected_outcome (brief observable prediction).
-For request: include operation (listed support name), arguments (matching schema), uncertainty (what is unknown), expected_information (what result would resolve it).
+For execute: include action (null keeps the current candidate; otherwise one native get/craft/inventory command). Include expected_outcome when you can predict an observable result.
+For request: include operation (listed support name) and arguments (matching schema). Include uncertainty and expected_information to explain the investigation.
 For reflect: include focus (brief reason for further internal deliberation). This consumes another controller call.
 For stop: include stop_reason (no_viable_strategy or budget_exhausted). Never claim task success.
-state_update may contain subgoal, strategy, plan, hypotheses, uncertainties, attempted_approaches, expected_outcome. Text fields must be concise; lists contain short strings. Empty object keeps state. Use null for progress_assessment when no environment outcome has yet occurred. support_assessment is null unless a support result is pending; then use {"useful":true|false,"resolved":true|false,"reason":"brief evidence"}."""
+state_update may contain subgoal, strategy, plan, hypotheses, uncertainties, attempted_approaches, expected_outcome. Text fields must be concise; lists contain short strings. Empty object keeps state. When an environment outcome is pending, assess it from visible evidence if possible; otherwise use null or omit progress_assessment. When a support result is pending, use {"useful":true|false,"resolved":true|false,"reason":"brief evidence"} if you can assess it; otherwise use null or omit support_assessment."""
 
 
 def _unique_json(raw: str) -> dict:
@@ -37,7 +38,7 @@ def _unique_json(raw: str) -> dict:
         result = {}
         for key, value in items:
             if key in result:
-                raise ValueError("duplicate JSON key")
+                raise ValueError(f"duplicate JSON key: {key}")
             result[key] = value
         return result
     value = json.loads(raw, object_pairs_hook=pairs)
@@ -51,54 +52,77 @@ def _short(value, limit=MAX_TEXT) -> bool:
 
 
 def _state_update(value: dict) -> dict:
-    if not isinstance(value, dict) or set(value) - set(STATE_FIELDS):
-        raise ValueError("Invalid state update")
+    if not isinstance(value, dict):
+        raise ValueError("state_update must be an object")
+    if extra := set(value) - set(STATE_FIELDS):
+        raise ValueError(f"state_update has unknown fields: {sorted(extra)}")
     for key, item in value.items():
         if key in {"hypotheses", "uncertainties", "attempted_approaches"}:
             if not isinstance(item, list) or len(item) > MAX_LIST or any(not _short(x, 240) for x in item):
-                raise ValueError("Invalid bounded state list")
+                raise ValueError(f"state_update.{key} must be a list of at most {MAX_LIST} short strings")
         elif not _short(item):
-            raise ValueError("Invalid bounded state text")
+            raise ValueError(f"state_update.{key} must be a short nonempty string")
     return value
 
 
 def parse_decision(raw: str, allowed: set[str]) -> dict:
     value = _unique_json(raw)
+    kind = value.get("kind")
+    required = {"execute": {"action"}, "request": {"operation", "arguments"},
+                "reflect": {"focus"}, "stop": {"stop_reason"}}
+    optional = {"execute": {"expected_outcome"},
+                "request": {"uncertainty", "expected_information"},
+                "reflect": set(), "stop": set()}
+    if kind not in required:
+        raise ValueError(f"Invalid decision kind: {kind!r}")
     common = {"kind", "reason", "state_update", "progress_assessment",
               "progress_evidence", "support_assessment"}
-    kind = value.get("kind")
-    fields = {"execute": {"action", "expected_outcome"},
-              "request": {"operation", "arguments", "uncertainty", "expected_information"},
-              "reflect": {"focus"}, "stop": {"stop_reason"}}
-    if kind not in fields or set(value) != common | fields[kind] or not _short(value["reason"], 512):
-        raise ValueError("Invalid controller decision schema")
+    if missing := ({"kind"} | required[kind]) - set(value):
+        raise ValueError(f"{kind} decision missing fields: {sorted(missing)}")
+    if extra := set(value) - common - required[kind] - optional[kind]:
+        raise ValueError(f"{kind} decision has unknown fields: {sorted(extra)}")
+    if "reason" in value and not _short(value["reason"], 512):
+        raise ValueError("reason must be a short nonempty string")
+    defaults = {"reason": "", "state_update": {}, "progress_assessment": None,
+                "progress_evidence": "", "support_assessment": None}
+    if kind == "execute":
+        defaults["expected_outcome"] = ""
+    elif kind == "request":
+        defaults.update(uncertainty="", expected_information="")
+    value = {**defaults, **value}
     _state_update(value["state_update"])
     assessment = value["progress_assessment"]
     if assessment is not None and assessment not in ASSESSMENTS:
-        raise ValueError("Invalid progress assessment")
+        raise ValueError(f"Invalid progress assessment: {assessment!r}")
+    if value["progress_evidence"] == []:
+        value["progress_evidence"] = ""
     if not isinstance(value["progress_evidence"], str) or len(value["progress_evidence"]) > 400:
-        raise ValueError("Invalid progress evidence")
+        raise ValueError("progress_evidence must be a string of at most 400 characters")
     support = value["support_assessment"]
     if support is not None and (not isinstance(support, dict) or
             set(support) != {"useful", "resolved", "reason"} or
             type(support["useful"]) is not bool or type(support["resolved"]) is not bool or
             not _short(support["reason"], 300)):
-        raise ValueError("Invalid support assessment")
+        raise ValueError("support_assessment requires useful and resolved booleans and a short reason")
     if kind == "execute":
         if value["action"] is not None and (not isinstance(value["action"], str) or
                                               parse_textcraft(value["action"]) != value["action"]):
-            raise ValueError("Invalid execution action")
-        if not _short(value["expected_outcome"]):
-            raise ValueError("Execution needs an observable expectation")
+            raise ValueError(f"Invalid native TextCraft action: {value['action']!r}")
+        if not isinstance(value["expected_outcome"], str) or len(value["expected_outcome"]) > MAX_TEXT:
+            raise ValueError("expected_outcome must be a string of at most 400 characters")
     elif kind == "request":
-        if (value["operation"] not in allowed or not isinstance(value["arguments"], dict) or
-                not _short(value["uncertainty"]) or not _short(value["expected_information"])):
-            raise ValueError("Invalid support request")
+        if not isinstance(value["operation"], str) or value["operation"] not in allowed:
+            raise ValueError(f"Unknown support operation: {value['operation']!r}")
+        if not isinstance(value["arguments"], dict):
+            raise ValueError("support arguments must be an object")
+        for name in ("uncertainty", "expected_information"):
+            if not isinstance(value[name], str) or len(value[name]) > MAX_TEXT:
+                raise ValueError(f"{name} must be a string of at most 400 characters")
     elif kind == "reflect":
         if not _short(value["focus"]):
-            raise ValueError("Invalid reflection focus")
+            raise ValueError("reflect focus must be a short nonempty string")
     elif value["stop_reason"] not in {"no_viable_strategy", "budget_exhausted"}:
-        raise ValueError("Invalid stop reason")
+        raise ValueError(f"Invalid stop reason: {value['stop_reason']!r}")
     return value
 
 
@@ -347,18 +371,39 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
             trace.termination_reason = "controller_parse_error"
             return trace, "controller_parse_error"
         event["controller_decision"] = choice
-        if (pending is None) != (choice["support_assessment"] is None):
-            event["parse_error"] = "support assessment must match pending support result"
+        if pending is None and choice["support_assessment"] is not None:
+            event["parse_error"] = "support_assessment has no pending support result"
             trace.events.append(event)
             trace.termination_reason = "controller_parse_error"
             return trace, "controller_parse_error"
-        if (state.last_progress is None or state.last_progress.get("assessment") is not None) != (
-                choice["progress_assessment"] is None):
-            event["parse_error"] = "progress assessment must match pending environment outcome"
+        if choice["progress_assessment"] is not None and (
+                state.last_progress is None or state.last_progress.get("assessment") is not None):
+            event["parse_error"] = "progress_assessment has no pending environment outcome"
             trace.events.append(event)
             trace.termination_reason = "controller_parse_error"
             return trace, "controller_parse_error"
-        event["state_changes"] = state.apply(choice["state_update"])
+        kind = choice["kind"]
+        if kind == "request":
+            request = SupportRequest(choice["operation"], choice["arguments"], choice["uncertainty"])
+            try:
+                operation, operation_reservation = executor.prepare(request, current)
+            except (ValueError, KeyError, TypeError) as exc:
+                event["parse_error"] = f"support arguments for {request.operation}: {exc}"
+                trace.events.append(event)
+                trace.termination_reason = "controller_parse_error"
+                return trace, "controller_parse_error"
+        patch = dict(choice["state_update"])
+        if kind == "execute":
+            prediction = choice["expected_outcome"] or patch.get("expected_outcome", "")
+            if prediction:
+                patch["expected_outcome"] = prediction
+        event["state_changes"] = state.apply(patch)
+        if kind == "execute" and not prediction and state.expected_outcome:
+            if not event["state_changes"]:
+                state.version += 1
+            event["state_changes"]["expected_outcome"] = {
+                "before": state.expected_outcome, "after": ""}
+            state.expected_outcome = ""
         if state.last_progress and state.last_progress.get("assessment") is None and choice["progress_assessment"]:
             state.last_progress["assessment"] = choice["progress_assessment"]
             state.last_progress["assessment_evidence"] = choice["progress_evidence"]
@@ -366,21 +411,21 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
         if pending is not None:
             event["support_assessment"] = state.assess_support(choice["support_assessment"])
             pending = None
-        event["recovery_state_after"] = state.snapshot()
-        kind = choice["kind"]
         if kind == "execute":
             trace.final_action = choice["action"] if choice["action"] is not None else current.current_action
-            state.expected_outcome = choice["expected_outcome"]
             event["action_revision"] = {"from": current.current_action, "to": trace.final_action}
+            event["recovery_state_after"] = state.snapshot()
             trace.events.append(event)
             trace.termination_reason = "execute"
             return trace, None
         if kind == "stop":
+            event["recovery_state_after"] = state.snapshot()
             trace.events.append(event)
             trace.final_action = None
             trace.termination_reason = choice["stop_reason"]
             return trace, choice["stop_reason"]
         if kind == "reflect":
+            event["recovery_state_after"] = state.snapshot()
             trace.events.append(event)
             continue
         if (operations_this_decision >= budget.max_operations_per_decision or
@@ -389,11 +434,9 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
             trace.events.append(event)
             trace.termination_reason = "operation_budget"
             return trace, "operation_budget"
-        request = SupportRequest(choice["operation"], choice["arguments"], choice["uncertainty"])
         event["request"] = request.as_dict()
         event["expected_information"] = choice["expected_information"]
         try:
-            operation, operation_reservation = executor.prepare(request, current)
             if reason := budget.block_reason(operation_reservation):
                 event["blocked"] = reason
                 trace.events.append(event)
@@ -418,9 +461,10 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
             else:
                 event["support_action_parse_error"] = True
         event["result"] = result.as_dict()
-        trace.events.append(event)
         state.add_support(request, result, choice["uncertainty"], choice["expected_information"])
         pending = state.support_findings[-1]
+        event["recovery_state_after"] = state.snapshot()
+        trace.events.append(event)
         current = replace(current, results=current.results + (result,),
                           support_history=(current.support_history + ({
                               "decision": context.decision, "operation": request.operation,
@@ -536,6 +580,10 @@ def run_recovery_episode(task: dict, config: dict, qwen, gpt, *, memory=None,
             if stop and stop not in {"wall_time_budget", "inference_time_budget",
                                      "no_viable_strategy", "budget_exhausted"}:
                 record["controller_fallback_reason"] = stop
+                record["controller_fallback_detail"] = next((
+                    event.get("parse_error") or event.get("error")
+                    for event in reversed(support_trace.events)
+                    if event.get("parse_error") or event.get("error")), None)
                 action = proposal
                 record["action"] = action
                 stop = None
@@ -595,6 +643,9 @@ def run_recovery_episode(task: dict, config: dict, qwen, gpt, *, memory=None,
     embedding_calls = sum(event["result"]["cost"]["model_calls"] for event in retrieval_events)
     embedding_seconds = sum(event["result"]["cost"]["inference_seconds"] for event in retrieval_events)
     return {"task_id": task["task_id"], "benchmark": "textcraft", "arm": arm,
+        **({"recovery_integration_version": REPAIR_VERSION,
+            "controller_fallbacks": sum("controller_fallback_reason" in record for record in trace)}
+           if arm == ARMS[1] else {}),
         "initial_observation": episode.initial_observation, "task_prompt": episode.task_prompt,
         "success": success, "status": status, "termination_reason": status,
         "environment_actions": actions_taken, "failed_actions": failed_actions,

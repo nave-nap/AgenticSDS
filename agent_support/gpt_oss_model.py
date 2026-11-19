@@ -26,7 +26,7 @@ CONSTRAIN_TOKEN = "<|constrain|>"
 _FINAL_MESSAGE_V3 = re.compile(
     r"\A(?:<\|channel\|>analysis<\|message\|>(?P<analysis>.*?)<\|end\|>)?"
     r"<\|start\|>assistant<\|channel\|>final"
-    r"(?P<format> <\|constrain\|>(?:json|JSON|schema))?"
+    r"(?P<format> ?<\|constrain\|>(?:json|JSON|schema))?"
     r"<\|message\|>(?P<body>.*?)<\|return\|>\Z", re.DOTALL)
 _STRUCTURAL_TOKEN = re.compile(r"<\|[^<>]{1,64}\|>")
 
@@ -214,8 +214,6 @@ def extract_decoded_final_v3(raw: str) -> dict | None:
     if not body.strip() or _STRUCTURAL_TOKEN.search(body):
         return None
     label = match.group("format")
-    if label is not None and match.group("analysis") is None:
-        return None  # The observed constrained variants followed an analysis message.
     return {"text": body.strip(), "final_channel_format": (
         "canonical" if label is None else "constrain_" + label.split(CONSTRAIN_TOKEN, 1)[1])}
 
@@ -232,8 +230,11 @@ def parse_harmony_completion_v3(tokenizer, generated_ids: list[int], limit: int)
         ids = {name: tokenizer.convert_tokens_to_ids(name) for name in
                ("<|start|>", "<|channel|>", "<|message|>", CONSTRAIN_TOKEN,
                 END_TOKEN, RETURN_TOKEN)}
-        expected = {"<|start|>": 1, "<|channel|>": 2, "<|message|>": 2,
-                    CONSTRAIN_TOKEN: 1, END_TOKEN: 1, RETURN_TOKEN: 1}
+        has_analysis = parsed["raw_completion"].startswith(ANALYSIS_MARKER)
+        expected = {"<|start|>": 1, "<|channel|>": 2 if has_analysis else 1,
+                    "<|message|>": 2 if has_analysis else 1,
+                    CONSTRAIN_TOKEN: 1, END_TOKEN: 1 if has_analysis else 0,
+                    RETURN_TOKEN: 1}
         if (all(type(ids[name]) is int and generated_ids.count(ids[name]) == count
                 for name, count in expected.items()) and
                 generated_ids[-1] == ids[RETURN_TOKEN]):

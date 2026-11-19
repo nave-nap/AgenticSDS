@@ -1,0 +1,101 @@
+{
+  "source_sha256": "ec07eb8053bf94622929e9318ffe83b61ca1dc608e874dee1a95c7aac6deed07",
+  "cases": [
+    {
+      "label": "request_inspect_state",
+      "task_id": "textcraft:seed:51",
+      "decision": 3,
+      "generation_status": "complete",
+      "generation_error": null,
+      "final_channel_format": "canonical",
+      "raw_completion": "<|channel|>analysis<|message|>We need to request support to identify missing items. Use inspect_state to see inventory.<|end|><|start|>assistant<|channel|>final<|message|>{\"kind\":\"request\",\"operation\":\"inspect_state_v1\",\"arguments\":{\"scope\":\"inventory\",\"limit\":20},\"uncertainty\":\"What items and quantities are currently in inventory to craft cyan dye?\",\"expected_information\":\"A list of items and counts to determine if prerequisites are met.\"}<|return|>",
+      "text": "{\"kind\":\"request\",\"operation\":\"inspect_state_v1\",\"arguments\":{\"scope\":\"inventory\",\"limit\":20},\"uncertainty\":\"What items and quantities are currently in inventory to craft cyan dye?\",\"expected_information\":\"A list of items and counts to determine if prerequisites are met.\"}",
+      "parse_error": "Invalid controller decision schema",
+      "controller_fallback_reason": "controller_parse_error",
+      "recovery_state_before": {
+        "attempted_approaches": [],
+        "epistemic_status": "Controller plans and hypotheses are interpretations; only task/history/support outputs are evidence.",
+        "expected_outcome": "",
+        "hypotheses": [],
+        "last_progress": {
+          "action": "craft 8 cyan dye using 1 blue dye, 1 green dye",
+          "assessment": null,
+          "environment_success": false,
+          "failed_action": true,
+          "observation_changed": true,
+          "observed_feedback": "Could not find enough items to craft minecraft:cyan_dye",
+          "predicted_outcome": "",
+          "repeated_attempts": 1
+        },
+        "objective": "craft cyan stained glass.",
+        "plan": "",
+        "strategy": "",
+        "subgoal": "",
+        "support_findings": [],
+        "uncertainties": [],
+        "version": 0
+      }
+    },
+    {
+      "label": "execute_decision",
+      "task_id": "textcraft:seed:126",
+      "decision": 3,
+      "generation_status": "complete",
+      "generation_error": null,
+      "final_channel_format": "constrain_json",
+      "raw_completion": "<|channel|>analysis<|message|>We need brown dye craft requires 1 cocoa beans. We have 1 cocoa beans. So we can craft brown dye. Use craft 1 brown dye.<|end|><|start|>assistant<|channel|>final <|constrain|>json<|message|>{\"kind\":\"execute\",\"action\":\"craft 1 brown dye using 1 cocoa beans\",\"expected_outcome\":\"Brown dye appears in inventory as it has the required ingredient.\",\"state_update\":{\"subgoal\":\"obtain brown dye\",\"plan\":\"Craft brown dye from cocoa beans\",\"expected_outcome\":\"Brown dye added\",\"attempted_approaches\":[\"get cocoa beans\"],\"hypotheses\":[],\"uncertainties\":[]},\"progress_assessment\":null,\"progress_evidence\":[],\"support_assessment\":null}<|return|>",
+      "text": "{\"kind\":\"execute\",\"action\":\"craft 1 brown dye using 1 cocoa beans\",\"expected_outcome\":\"Brown dye appears in inventory as it has the required ingredient.\",\"state_update\":{\"subgoal\":\"obtain brown dye\",\"plan\":\"Craft brown dye from cocoa beans\",\"expected_outcome\":\"Brown dye added\",\"attempted_approaches\":[\"get cocoa beans\"],\"hypotheses\":[],\"uncertainties\":[]},\"progress_assessment\":null,\"progress_evidence\":[],\"support_assessment\":null}",
+      "parse_error": "Invalid controller decision schema",
+      "controller_fallback_reason": "controller_parse_error",
+      "recovery_state_before": {
+        "attempted_approaches": [],
+        "epistemic_status": "Controller plans and hypotheses are interpretations; only task/history/support outputs are evidence.",
+        "expected_outcome": "",
+        "hypotheses": [],
+        "last_progress": {
+          "action": "get 1 cocoa beans",
+          "assessment": null,
+          "environment_success": false,
+          "failed_action": false,
+          "observation_changed": true,
+          "observed_feedback": "Got 1 cocoa beans",
+          "predicted_outcome": "",
+          "repeated_attempts": 1
+        },
+        "objective": "craft brown concrete powder.",
+        "plan": "",
+        "strategy": "",
+        "subgoal": "",
+        "support_findings": [],
+        "uncertainties": [],
+        "version": 0
+      }
+    },
+    {
+      "label": "malformed_final_header",
+      "task_id": "textcraft:seed:51",
+      "decision": 1,
+      "generation_status": "malformed_final_header",
+      "generation_error": "malformed_final_header",
+      "final_channel_format": null,
+      "raw_completion": "<|channel|>analysis<|message|>Need to craft cyan stained glass but missing cyan dye. Need to produce cyan dye via 1 blue dye + 1 green dye. Need blue dye via cornflower or lapis? We have recipe for blue dye using cornflower and lapis. Only inventory? None shown. Probably need to get blue dye first. But can't craft without yellow? We need green dye? We have recipe for green dye from? none shown. Might need to craft green dye from green wool etc. Might first craft green dye then blue. Since inventory unknown. But likely cannot craft due to missing ingredients. So ask for inventory? No support. But we have no inventory. So we should first get required dye by craft? Wait we need blue dye and green dye. Maybe craft blue dye from cornflower: recipe exists. For green dye, recipe for green dye? Might be from green dye creation: green dye from green wax? Not in list. Maybe green dye from green dye? Not present. But we can craft green dye from green dye? Wait earlier: craft 1 green dye using 1 green dye? no. Actually recipe list includes none for green dye. Possibly can craft green dye from green dye but we don't have. Hmm maybe easier: obtain yellow stained glass? No.\n\nI think we need to craft blue dye, green dye first. but we don't know inventory of cornflower, green dye. maybe cannot proceed. Could request support \"verify_prerequisites_v1\" for craft 1 blue dye.<|end|><|start|>assistant<|channel|>final <|constrain|>reflection<|message|>{\"kind\":\"request\",\"operation\":\"verify_prerequisites_v1\",\"arguments\":{\"action\":\"craft 1 blue dye using 1 cornflower\"},\"uncertainty\":\"Does the recipe for blue dye from cornflower exist and is inventory sufficient?\",\"expected_information\":\"Displayed recipe and inventory check for 1 cornflower.\"}<|return|>",
+      "text": "",
+      "parse_error": null,
+      "controller_fallback_reason": "controller_generation_failure",
+      "recovery_state_before": {
+        "attempted_approaches": [],
+        "epistemic_status": "Controller plans and hypotheses are interpretations; only task/history/support outputs are evidence.",
+        "expected_outcome": "",
+        "hypotheses": [],
+        "last_progress": null,
+        "objective": "craft cyan stained glass.",
+        "plan": "",
+        "strategy": "",
+        "subgoal": "",
+        "support_findings": [],
+        "uncertainties": [],
+        "version": 0
+      }
+    }
+  ]
+}

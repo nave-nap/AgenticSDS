@@ -15,10 +15,13 @@ from agent_support.autonomous_support import (SupportBudget, SupportContext, Sup
                                               make_support_controller, run_support_loop)
 from agent_support.policy import parse_textcraft
 from agent_support.reparse_controller_completions import reparse_run
+from agent_support.recovery_v4 import parse_decision
 
 
 FIXTURE = Path(__file__).parent / "fixtures/v2_controller_final_channels.json"
 CASES = {item["decision"]: item for item in json.loads(FIXTURE.read_text())["cases"]}
+REAL_V4 = {item["label"]: item for item in json.loads((Path(__file__).parent /
+    "fixtures/recovery_v4_failed_controller_fixtures.json").read_text())["cases"]}
 AVAILABLE = {"retrieve_episodic_memory_v1", "inspect_history_v1",
              "reason_over_artifacts_v1", "inspect_state_v1"}
 
@@ -96,6 +99,53 @@ def test_parser_selection_is_explicit_and_preserves_v2_default():
                                        "harmony_final_v3")["generation_status"] == "complete"
     with pytest.raises(ValueError, match="Unknown GPT-OSS completion parser"):
         parse_configured_completion(tokenizer, ids, len(ids) + 1, "unlisted")
+
+
+@pytest.mark.parametrize("header", [
+    "<|start|>assistant<|channel|>final<|message|>",
+    "<|start|>assistant<|channel|>final <|constrain|>json<|message|>",
+    "<|start|>assistant<|channel|>final<|constrain|>JSON<|message|>",
+])
+def test_complete_final_headers_with_no_analysis(header):
+    tokenizer = HarmonyTokenizer()
+    raw = header + '{"kind":"execute","action":"inventory","reason":"inspect"}' + '<|return|>'
+    ids = tokenizer.encode(raw)
+    parsed = parse_harmony_completion_v3(tokenizer, ids, len(ids) + 1)
+    assert parsed["generation_status"] == "complete"
+    assert parsed["text"] == '{"kind":"execute","action":"inventory","reason":"inspect"}'
+
+
+@pytest.mark.parametrize("suffix", ["", "<|end|>", "<|return|><|return|>"])
+def test_incomplete_or_wrong_final_terminator_is_rejected(suffix):
+    tokenizer = HarmonyTokenizer()
+    raw = ("<|start|>assistant<|channel|>final <|constrain|>json<|message|>"
+           '{"kind":"execute","action":"inventory","reason":"inspect"}' + suffix)
+    ids = tokenizer.encode(raw)
+    parsed = parse_harmony_completion_v3(tokenizer, ids, len(ids) + 1)
+    assert parsed["generation_status"] != "complete" and parsed["text"] == ""
+
+
+@pytest.mark.parametrize("label,kind", [("request_inspect_state", "request"),
+                                         ("execute_decision", "execute")])
+def test_real_v4_final_channels_and_compact_decisions(label, kind):
+    item = REAL_V4[label]
+    assert item["parse_error"] == "Invalid controller decision schema"
+    tokenizer = HarmonyTokenizer()
+    ids = tokenizer.encode(item["raw_completion"])
+    parsed = parse_harmony_completion_v3(tokenizer, ids, len(ids) + 1)
+    assert parsed["generation_status"] == item["generation_status"] == "complete"
+    assert parsed["text"] == item["text"]
+    assert parsed["final_channel_format"] == item["final_channel_format"]
+    assert parse_decision(parsed["text"], {"inspect_state_v1"})["kind"] == kind
+
+
+def test_real_v4_reflection_header_remains_rejected():
+    item = REAL_V4["malformed_final_header"]
+    tokenizer = HarmonyTokenizer()
+    ids = tokenizer.encode(item["raw_completion"])
+    parsed = parse_harmony_completion_v3(tokenizer, ids, len(ids) + 1)
+    assert parsed["generation_status"] == "malformed_final_header"
+    assert parsed["text"] == "" and parsed["recovered_final_channel"] is False
 
 
 @pytest.mark.parametrize("raw", [

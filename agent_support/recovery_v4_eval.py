@@ -16,8 +16,9 @@ from .autonomous_memory import FrozenTrajectoryRetrieval
 from .common import canonical_digest, read_json, validate_manifest, write_json_atomic
 from .controller_backend import GptOssControllerWorker
 from .heldout50_evaluation import FROZEN_SHA256, RECIPE_SHA256
+from .gpt_oss_model import extract_decoded_final_v3
 from .model import QwenModel
-from .recovery_v4 import ARMS, run_recovery_episode
+from .recovery_v4 import ARMS, REPAIR_VERSION, parse_decision, run_recovery_episode
 from .runner import package_versions
 from .trajectory_memory import MPNetEmbedder
 
@@ -130,16 +131,32 @@ def preflight(arm: str) -> dict:
                   ("torch", "transformers", "bitsandbytes")),
               "gptoss_python_exists": bool(python and Path(python).is_file()),
               "gptoss_cache_exists": bool(cache and Path(cache).is_dir())}
+    protocol_checks = {}
+    if arm == "autonomous_recovery_v4":
+        sample = '{"kind":"request","reason":"inspect visible state","operation":"inspect_state_v1","arguments":{"scope":"all","limit":2}}'
+        compact = '{"kind":"execute","reason":"try recipe","action":"inventory"}'
+        canonical = '<|start|>assistant<|channel|>final<|message|>' + compact + '<|return|>'
+        constrained = ('<|start|>assistant<|channel|>final <|constrain|>json<|message|>'
+                       + sample + '<|return|>')
+        protocol_checks = {
+            "harmony_final_v3_configured": (spec["model"].get("completion_parser") == "harmony_final_v3"),
+            "canonical_final_extracts": extract_decoded_final_v3(canonical) is not None,
+            "constrained_json_final_extracts": extract_decoded_final_v3(constrained) is not None,
+            "compact_request_validates": (parse_decision(sample, {"inspect_state_v1"})["kind"] == "request"),
+            "compact_execute_validates": (parse_decision(compact, set())["action"] == "inventory")}
     return {"arm": arm, "protocol": PROTOCOL, "task_count": len(selected["tasks"]),
+            **({"recovery_integration_version": REPAIR_VERSION} if arm == ARMS[1] else {}),
             "manifest_sha256": MANIFEST_SHA256, "recipe_order_sha256": RECIPE_SHA256,
             "config_sha256": canonical_digest(config), "memory": memory_checks(config),
-            "runtime_checks": checks, "package_versions": versions}
+            "runtime_checks": checks, "protocol_checks": protocol_checks,
+            "package_versions": versions}
 
 
 def initialize(root: str | Path) -> dict:
     commit = require_clean_commit()
     checks = {arm: preflight(arm) for arm in ARMS}
-    if any(not all(item["runtime_checks"].values()) or not item["memory"]["available"]
+    if any(not all(item["runtime_checks"].values()) or
+           not all(item["protocol_checks"].values()) or not item["memory"]["available"]
            for item in checks.values()):
         raise ValueError("Locust preflight requires Qwen, GPT-OSS, TextCraft, and disjoint memory")
     plan = {"schema_version": 1, "protocol": PROTOCOL, "git_commit": commit,
