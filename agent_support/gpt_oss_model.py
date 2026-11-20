@@ -355,6 +355,21 @@ class GptOss20BModel:
         inputs = self._encode_messages(messages, tensors=True)
         return int(inputs["input_ids"].shape[1])
 
+    def release_cuda_cache(self) -> None:
+        """Release unused allocator blocks after a completed worker request."""
+        diagnostics = self.memory_diagnostics
+        before = diagnostics.snapshot() if diagnostics is not None else None
+        error_type = None
+        try:
+            self.torch.cuda.empty_cache()
+        except Exception as exc:
+            error_type = type(exc).__name__
+        finally:
+            if diagnostics is not None:
+                diagnostics.write(event="cache_release", request_id=self._diagnostic_request_id,
+                                  status="error" if error_type else "ok", error_type=error_type,
+                                  memory_before=before, memory_after=diagnostics.snapshot())
+
     def generate(self, messages: list[dict], max_new_tokens: int | None = None) -> dict:
         limit = self.max_new_tokens if max_new_tokens is None else max_new_tokens
         diagnostics = self.memory_diagnostics

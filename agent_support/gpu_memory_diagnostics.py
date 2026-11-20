@@ -10,10 +10,15 @@ from pathlib import Path
 
 ENABLE_ENV = "AGENT_SUPPORT_GPU_MEMORY_DIAGNOSTICS"
 DIRECTORY_ENV = "AGENT_SUPPORT_GPU_MEMORY_DIAGNOSTICS_DIR"
+CACHE_RELEASE_ENV = "AGENT_SUPPORT_GPTOSS_CUDA_CACHE_RELEASE"
+
+
+def cache_release_enabled() -> bool:
+    return os.environ.get(CACHE_RELEASE_ENV) == "1"
 
 
 def enabled() -> bool:
-    return os.environ.get(ENABLE_ENV) == "1"
+    return os.environ.get(ENABLE_ENV) == "1" or cache_release_enabled()
 
 
 class GpuMemoryDiagnostics:

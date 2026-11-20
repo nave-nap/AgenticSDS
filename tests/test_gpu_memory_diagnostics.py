@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 from types import SimpleNamespace
 
@@ -12,7 +13,9 @@ from agent_support import gpt_oss_model, recovery_v4_eval
 from agent_support.common import canonical_digest
 from agent_support.controller_backend import GptOssControllerWorker
 from agent_support.gpu_memory_diagnostics import (DIRECTORY_ENV, ENABLE_ENV,
-                                                  GpuMemoryDiagnostics, enabled)
+                                                  CACHE_RELEASE_ENV, GpuMemoryDiagnostics,
+                                                  cache_release_enabled, enabled)
+from agent_support.gpt_oss_controller_worker import serve
 from agent_support.model import QwenModel
 
 
@@ -24,6 +27,8 @@ class FakeCuda:
         self.peak_reserved = 140
         self.resets = 0
         self.syncs = 0
+        self.releases = 0
+        self.release_error = None
 
     def bump(self, allocated, reserved):
         self.allocated = allocated
@@ -62,6 +67,12 @@ class FakeCuda:
 
     def get_device_name(self, _device):
         return "Fake L40S"
+
+    def empty_cache(self):
+        self.releases += 1
+        if self.release_error is not None:
+            raise self.release_error
+        self.reserved = self.allocated
 
 
 class FakeTorch:
@@ -128,7 +139,9 @@ def fake_gpt(torch_api, telemetry, generate):
 
 def test_opt_in_switch_and_worker_directory(monkeypatch, tmp_path):
     monkeypatch.delenv(ENABLE_ENV, raising=False)
+    monkeypatch.delenv(CACHE_RELEASE_ENV, raising=False)
     assert not enabled()
+    assert not cache_release_enabled()
     captured = []
     class Process:
         stdin = stdout = None
@@ -150,6 +163,113 @@ def test_opt_in_switch_and_worker_directory(monkeypatch, tmp_path):
     worker = GptOssControllerWorker(spec, tmp_path / "workers")
     worker.close()
     assert captured[-1][DIRECTORY_ENV] == str(tmp_path / "diagnostics")
+
+    monkeypatch.delenv(ENABLE_ENV)
+    monkeypatch.setenv(CACHE_RELEASE_ENV, "1")
+    assert cache_release_enabled() and enabled()
+    worker = GptOssControllerWorker(spec, tmp_path / "workers")
+    worker.close()
+    assert captured[-1][DIRECTORY_ENV] == str(tmp_path / "diagnostics")
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_worker_releases_only_after_generation_and_preserves_response(monkeypatch, failure):
+    monkeypatch.setenv(CACHE_RELEASE_ENV, "1")
+    order = []
+    class OutOfMemoryError(RuntimeError):
+        pass
+    class Model:
+        def __init__(self, _config):
+            self.in_generation = False
+        def metadata(self):
+            return {}
+        def generate(self, _messages, max_new_tokens=None):
+            order.append("generate")
+            self.in_generation = True
+            try:
+                if failure:
+                    raise OutOfMemoryError("allocation failed")
+                return {"text": "inventory"}
+            finally:
+                self.in_generation = False
+        def release_cuda_cache(self):
+            assert not self.in_generation
+            order.append("release")
+    class Sink(io.StringIO):
+        def write(self, value):
+            order.append("response")
+            return super().write(value)
+    source = io.StringIO("\n".join([json.dumps({"op": "init", "config": {}}),
+        json.dumps({"op": "generate", "messages": [], "max_new_tokens": 40}),
+        json.dumps({"op": "count_messages_tokens", "messages": []}), ""]))
+    # Count fails on this stand-in; it must not trigger another release.
+    sink = Sink()
+    serve(source=source, sink=sink, model_factory=Model)
+    responses = [json.loads(line) for line in sink.getvalue().splitlines()]
+    assert order == ["response", "generate", "release", "response", "response"]
+    if failure:
+        assert responses[1] == {"ok": False, "error_type": "OutOfMemoryError",
+                                "error": "allocation failed"}
+    else:
+        assert responses[1] == {"ok": True, "generation": {"text": "inventory"}}
+
+
+@pytest.mark.parametrize("generation_error", [False, True])
+def test_worker_default_skips_release_and_cleanup_exception_is_contained(monkeypatch,
+                                                                          generation_error):
+    calls = []
+    class OutOfMemoryError(RuntimeError):
+        pass
+    class Model:
+        def __init__(self, _config):
+            pass
+        def metadata(self):
+            return {}
+        def generate(self, _messages, max_new_tokens=None):
+            calls.append("generate")
+            if generation_error:
+                raise OutOfMemoryError("allocation failed")
+            return {"text": "inventory"}
+        def release_cuda_cache(self):
+            calls.append("release")
+            raise RuntimeError("cache release failed")
+    source = "\n".join([json.dumps({"op": "init", "config": {}}),
+        json.dumps({"op": "generate", "messages": []}), ""])
+    monkeypatch.delenv(CACHE_RELEASE_ENV, raising=False)
+    sink = io.StringIO()
+    serve(source=io.StringIO(source), sink=sink, model_factory=Model)
+    assert calls == ["generate"]
+    expected = ({"ok": False, "error_type": "OutOfMemoryError", "error": "allocation failed"}
+                if generation_error else {"ok": True, "generation": {"text": "inventory"}})
+    assert json.loads(sink.getvalue().splitlines()[1]) == expected
+
+    monkeypatch.setenv(CACHE_RELEASE_ENV, "1")
+    sink = io.StringIO()
+    serve(source=io.StringIO(source), sink=sink, model_factory=Model)
+    assert calls == ["generate", "generate", "release"]
+    assert json.loads(sink.getvalue().splitlines()[1]) == expected
+
+
+def test_cache_release_records_before_after_and_cleanup_failure(tmp_path):
+    torch_api = FakeTorch()
+    telemetry = GpuMemoryDiagnostics(tmp_path, "gpt_oss_cuda_memory", torch_api)
+    model = fake_gpt(torch_api, telemetry, lambda **_: None)
+    model._diagnostic_request_id = 4
+    torch_api.cuda.bump(100, 320)
+    model.release_cuda_cache()
+    release = events(tmp_path)[0]
+    assert release["event"] == "cache_release" and release["request_id"] == 4
+    assert release["status"] == "ok" and release["error_type"] is None
+    assert release["memory_before"]["allocated_bytes"] == 100
+    assert release["memory_before"]["reserved_bytes"] == 320
+    assert release["memory_after"]["reserved_bytes"] == 100
+    assert torch_api.cuda.releases == 1 and torch_api.cuda.syncs == 0
+
+    torch_api.cuda.release_error = RuntimeError("cleanup failed")
+    model.release_cuda_cache()
+    failed = events(tmp_path)[1]
+    assert failed["status"] == "error" and failed["error_type"] == "RuntimeError"
+    assert torch_api.cuda.releases == 2
 
 
 def test_diagnostic_batch_uses_its_own_run_directory(monkeypatch, tmp_path):
