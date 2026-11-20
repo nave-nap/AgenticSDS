@@ -17,20 +17,20 @@ from .benchmarks import make_episode
 from .policy import parse_textcraft, textcraft_messages
 
 ARMS = ("expanded_v3_v1", "autonomous_recovery_v4")
-REPAIR_VERSION = "autonomous_recovery_v4_repair_v1"
+REPAIR_VERSION = "autonomous_recovery_v4_protocol_v2"
 STATE_FIELDS = ("subgoal", "strategy", "plan", "hypotheses", "uncertainties",
                 "attempted_approaches", "expected_outcome")
 ASSESSMENTS = {"progressed", "stalled", "contradicted", "uncertain", "not_applicable"}
 MAX_TEXT = 400
 MAX_LIST = 8
-SYSTEM = """You are the adaptive TextCraft recovery controller. Decide autonomously whether to act, revise Qwen's action, investigate with a listed support, update your strategy, or stop. No support is mandatory. Use only visible task evidence and listed supports; no simulator or hidden state access. The environment alone verifies success. Treat your hypotheses, plans, and predictions as interpretations, not verified facts. Examine the prior prediction and observed feedback, then set progress_assessment using visible evidence. After a support result, judge its usefulness and decide whether it resolved your uncertainty. Return exactly one JSON object in the final channel, no markdown or extra keys.
+SYSTEM = """You are the adaptive TextCraft recovery controller. Decide autonomously whether to act, revise Qwen's action, investigate with a listed support, update your strategy, or stop. No support is mandatory. Use only visible task evidence and listed supports; no simulator or hidden state access. The environment alone verifies success. Treat your hypotheses, plans, and predictions as interpretations, not verified facts. Return exactly one JSON object in the final channel, no markdown or extra keys.
 Required key: kind. Include reason, state_update, progress_assessment, progress_evidence, and support_assessment when you have evidence to report; omitted fields keep their current state.
 kind is execute, request, reflect, or stop.
-For execute: include action (null keeps the current candidate; otherwise one native get/craft/inventory command). Include expected_outcome when you can predict an observable result.
-For request: include operation (listed support name) and arguments (matching schema). Include uncertainty and expected_information to explain the investigation.
+For execute: include action (null keeps the current candidate; otherwise one native environment command beginning with get or craft, or inventory). Include expected_outcome when you can predict an observable result.
+For request: include operation (an exact registered support name from the capabilities catalog) and arguments (matching that support's schema). Request is only for supports; get, craft, and inventory are environment actions, never support operations. Include uncertainty and expected_information to explain the investigation.
 For reflect: include focus (brief reason for further internal deliberation). This consumes another controller call.
 For stop: include stop_reason (no_viable_strategy or budget_exhausted). Never claim task success.
-state_update may contain subgoal, strategy, plan, hypotheses, uncertainties, attempted_approaches, expected_outcome. Text fields must be concise; lists contain short strings. Empty object keeps state. When an environment outcome is pending, assess it from visible evidence if possible; otherwise use null or omit progress_assessment. When a support result is pending, use {"useful":true|false,"resolved":true|false,"reason":"brief evidence"} if you can assess it; otherwise use null or omit support_assessment."""
+state_update may contain subgoal, strategy, plan, hypotheses, uncertainties, attempted_approaches, expected_outcome. Text fields must be concise; lists contain short strings. Empty object keeps state. When observed feedback changes your intended approach, update strategy or plan in state_update; do not repeat unchanged text. Compare a pending predicted_outcome with observed_feedback and, when visible evidence supports a judgment, set progress_assessment (progressed, stalled, contradicted, uncertain, or not_applicable) and a brief progress_evidence string. Otherwise use null or omit it. After a support result, assess whether it was useful and resolved the uncertainty using {"useful":true|false,"resolved":true|false,"reason":"brief evidence"} when the result permits a judgment; otherwise use null or omit support_assessment."""
 
 
 def _unique_json(raw: str) -> dict:
@@ -644,7 +644,9 @@ def run_recovery_episode(task: dict, config: dict, qwen, gpt, *, memory=None,
     embedding_seconds = sum(event["result"]["cost"]["inference_seconds"] for event in retrieval_events)
     return {"task_id": task["task_id"], "benchmark": "textcraft", "arm": arm,
         **({"recovery_integration_version": REPAIR_VERSION,
-            "controller_fallbacks": sum("controller_fallback_reason" in record for record in trace)}
+            "controller_fallbacks": sum("controller_fallback_reason" in record for record in trace),
+            "support_assessments": sum(event.get("support_assessment") is not None
+                for record in trace for event in record.get("support_trace", {}).get("events", []))}
            if arm == ARMS[1] else {}),
         "initial_observation": episode.initial_observation, "task_prompt": episode.task_prompt,
         "success": success, "status": status, "termination_reason": status,
@@ -683,7 +685,8 @@ def run_recovery_episode(task: dict, config: dict, qwen, gpt, *, memory=None,
         "elapsed_seconds": round(clock() - started, 3),
         "strategy_changes": sum(bool(event.get("state_changes", {}).get("strategy"))
             for record in trace for event in record["support_trace"]["events"]),
-        "replanning_events": sum(bool(event.get("state_changes", {}).get("plan"))
+        "replanning_events": sum(bool(event.get("state_changes", {}).get("plan")) and
+            (arm != ARMS[1] or bool(event["state_changes"]["plan"]["before"]))
             for record in trace for event in record["support_trace"]["events"]),
         "progress_assessments": sum(bool(event.get("progress_assessment"))
             for record in trace for event in record["support_trace"]["events"]),

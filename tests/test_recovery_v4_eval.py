@@ -6,9 +6,22 @@ from agent_support.common import canonical_digest
 
 def test_repaired_preflight_checks_protocol_without_gpu():
     result = evaluation.preflight("autonomous_recovery_v4")
-    assert result["recovery_integration_version"] == "autonomous_recovery_v4_repair_v1"
+    assert result["recovery_integration_version"] == "autonomous_recovery_v4_protocol_v2"
     assert all(result["protocol_checks"].values())
     assert result["task_count"] == 30
+
+
+def test_support_assessment_total_is_v4_only(monkeypatch, tmp_path):
+    tasks = [{"task_id": "one", "observation_sha256": "digest", "seed": 51}]
+    monkeypatch.setattr(evaluation, "manifest", lambda: {"tasks": tasks})
+    monkeypatch.setattr(evaluation, "checked_plan", lambda *_: {"git_commit": "fixed"})
+    monkeypatch.setattr(evaluation, "completed", lambda *_: {
+        "one": {"task_id": "one", "success": False, "environment_actions": 1,
+                "support_assessments": 2, "support_useful_judgments": 1, "trace": []}})
+    v4 = evaluation.aggregate(tmp_path, "autonomous_recovery_v4")
+    v3 = evaluation.aggregate(tmp_path, "expanded_v3_v1")
+    assert v4["totals"]["support_assessments"] == 2
+    assert "support_assessments" not in v3["totals"]
 
 
 def test_resume_selects_only_missing_tasks(monkeypatch, tmp_path):

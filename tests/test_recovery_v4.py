@@ -7,7 +7,7 @@ import pytest
 
 from agent_support.autonomous_support import SupportBudget, SupportContext
 from agent_support.recovery_v4 import (AnalyzeFailures, RecoveryState, VerifyPrerequisites,
-    adaptive_loop, parse_decision, recovery_executor, run_recovery_episode)
+    SYSTEM, adaptive_loop, parse_decision, recovery_executor, run_recovery_episode)
 from agent_support.recovery_v4_eval import config_for, manifest
 
 REAL_V4 = {item["label"]: item for item in json.loads((Path(__file__).parent /
@@ -78,6 +78,14 @@ def test_manifest_and_budget_are_frozen():
         assert config["limits"] == {"wall_seconds": 2400, "inference_seconds": 2100,
                                      "max_model_calls_total": 720}
         assert config["autonomous_support"]["budget"]["max_operations_per_task"] == 100
+
+
+def test_prompt_separates_environment_actions_from_support_requests():
+    assert "Request is only for supports" in SYSTEM
+    assert "get, craft, and inventory are environment actions" in SYSTEM
+    assert "Compare a pending predicted_outcome with observed_feedback" in SYSTEM
+    assert "update strategy or plan in state_update" in SYSTEM
+    assert "Otherwise use null or omit" in SYSTEM
 
 
 def test_strict_decision_and_bounded_interpretations():
@@ -243,6 +251,8 @@ def test_progress_assessment_and_state_update_survive_episode_checkpoints():
 @pytest.mark.parametrize("decision,detail", [
     ({"kind": "request", "reason": "look", "operation": "unknown_v1", "arguments": {}},
      "Unknown support operation"),
+    ({"kind": "request", "operation": "get", "arguments": {"item": "cocoa beans"}},
+     "Unknown support operation: 'get'"),
     ({"kind": "request", "reason": "look", "operation": "inspect_state_v1",
       "arguments": {"scope": "all", "limit": 0}, "state_update": {"strategy": "must not persist"}},
      "inspect_state requires"),
@@ -264,6 +274,75 @@ def test_invalid_decision_falls_back_once_with_precise_detail(decision, detail):
     assert detail in record["controller_fallback_detail"]
     assert record["action"] == "inventory"
     assert result["recovery_state_final"]["strategy"] == ""
+
+
+def test_extra_closing_brace_is_parse_error_with_one_fallback():
+    gpt = Gpt(['{"kind":"execute","action":"get 1 log"}}'])
+    config = config_for("autonomous_recovery_v4")
+    config["max_actions"] = config["max_decisions"] = 1
+    config["autonomous_support"]["operations"] = []
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": Episode().initial_observation},
+        config, Qwen(), gpt, episode_factory=factory)
+    record = result["trace"][0]
+    assert result["controller_model_calls"] == 1 and result["controller_errors"] == 1
+    assert result["controller_fallbacks"] == 1 and result["support_calls"] == 0
+    assert record["controller_fallback_reason"] == "controller_parse_error"
+    assert "Extra data" in record["controller_fallback_detail"]
+    assert record["action"] == "inventory"
+
+
+@pytest.mark.parametrize("useful", [True, False])
+def test_support_assessment_is_recorded_and_counted(useful):
+    gpt = Gpt([
+        choice("request", operation="inspect_state_v1", arguments={"scope": "recipes", "limit": 2},
+               uncertainty="which recipe is visible", expected_information="displayed recipe"),
+        choice("execute", action="get 1 log", expected_outcome="collect log",
+               support_assessment={"useful": useful, "resolved": useful,
+                                   "reason": "displayed recipe was inspected"}),
+    ])
+    config = config_for("autonomous_recovery_v4")
+    config["max_actions"] = config["max_decisions"] = 1
+    config["autonomous_support"]["operations"] = ["inspect_state_v1"]
+    checkpoints = []
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": Episode().initial_observation},
+        config, Qwen(), gpt, episode_factory=factory, checkpoint=checkpoints.append)
+    assert result["success"] and result["support_calls"] == 1
+    assert result["support_assessments"] == 1
+    assert result["support_useful_judgments"] == int(useful)
+    finding = result["recovery_state_final"]["support_findings"][0]
+    assert finding["assessment"]["useful"] is useful
+    assert checkpoints[-1]["recovery_state"]["support_findings"][0]["assessment"] == finding["assessment"]
+    assert result["trace"][0]["support_trace"]["events"][1]["support_assessment"]["useful"] is useful
+
+
+def test_only_revisions_of_existing_plan_count_as_replanning():
+    gpt = Gpt([
+        choice("execute", action="inventory", expected_outcome="inventory feedback",
+               state_update={"plan": "inspect inventory", "strategy": "inspect"}),
+        choice("execute", action="inventory", expected_outcome="inventory feedback",
+               progress_assessment="stalled", progress_evidence="no material acquired",
+               state_update={"plan": "inspect inventory", "strategy": "inspect"}),
+        choice("execute", action="inventory", expected_outcome="inventory feedback",
+               progress_assessment="stalled", progress_evidence="still no material",
+               state_update={"plan": "gather log", "strategy": "gather"}),
+        choice("execute", action="get 1 log", expected_outcome="log acquired",
+               progress_assessment="stalled", progress_evidence="inventory did not gather log"),
+    ])
+    config = config_for("autonomous_recovery_v4")
+    config["max_actions"] = config["max_decisions"] = 4
+    config["autonomous_support"]["operations"] = []
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": Episode().initial_observation},
+        config, Qwen(), gpt, episode_factory=factory)
+    assert result["success"] and result["environment_actions"] == 4
+    assert result["strategy_changes"] == 2
+    assert result["replanning_events"] == 1
+    assert result["progress_assessments"] == 3
+    events = [record["support_trace"]["events"][0] for record in result["trace"]]
+    assert events[0]["state_changes"]["plan"] == {"before": "", "after": "inspect inventory"}
+    assert "plan" not in events[1]["state_changes"]
+    assert events[2]["state_changes"]["plan"] == {
+        "before": "inspect inventory", "after": "gather log"}
+    assert result["recovery_state_final"]["plan"] == "gather log"
 
 
 def test_real_seed51_request_executes_inspect_state():
@@ -336,3 +415,22 @@ def test_real_malformed_header_generation_falls_back_with_status():
     assert result["support_calls"] == 0 and result["environment_actions"] == 1
     assert result["trace"][0]["controller_fallback_reason"] == "controller_generation_failure"
     assert result["trace"][0]["controller_fallback_detail"] == "malformed_final_header"
+
+
+def test_two_malformed_final_headers_count_as_two_fallbacks():
+    class MalformedTwice(Gpt):
+        def generate(self, messages, max_new_tokens=None):
+            self.messages.append(messages)
+            return {"text": "", "raw_completion": "invalid final header",
+                    "generation_status": "malformed_final_header", "input_tokens": 20,
+                    "output_tokens": 10, "inference_seconds": 0.1}
+    config = config_for("autonomous_recovery_v4")
+    config["max_actions"] = config["max_decisions"] = 2
+    config["autonomous_support"]["operations"] = []
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": Episode().initial_observation},
+        config, Qwen(), MalformedTwice([]), episode_factory=factory)
+    assert result["controller_model_calls"] == 2
+    assert result["controller_errors"] == result["controller_fallbacks"] == 2
+    assert result["support_calls"] == 0 and result["environment_actions"] == 2
+    assert [record["controller_fallback_detail"] for record in result["trace"]] == [
+        "malformed_final_header", "malformed_final_header"]

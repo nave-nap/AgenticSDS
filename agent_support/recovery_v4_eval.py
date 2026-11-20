@@ -356,6 +356,8 @@ def aggregate(root: str | Path, arm: str) -> dict:
                "support_calls", "environment_seconds", "elapsed_seconds", "parser_errors",
                "controller_errors", "strategy_changes", "replanning_events",
                "progress_assessments", "support_useful_judgments", "qwen_generation_failures")
+    if arm == ARMS[1]:
+        numeric += ("support_assessments",)
     return {"arm": arm, "protocol": PROTOCOL, "manifest_sha256": MANIFEST_SHA256,
             "plan_sha256": canonical_digest(plan), "complete": len(rows) == 30,
             "tasks_completed": len(rows), "successes": sum(bool(row["success"]) for row in rows),
