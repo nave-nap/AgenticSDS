@@ -14,6 +14,9 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Callable, Literal, Protocol
 
+from .controller_backend import (ControllerWorkerOOM, ControllerWorkerUnavailable,
+                                 worker_failure_marker)
+
 
 @dataclass(frozen=True)
 class SupportCost:
@@ -244,6 +247,9 @@ class SupportExecutor:
             if not isinstance(result, SupportResult):
                 raise ValueError("Operation returned an invalid result")
             return result
+        except (ControllerWorkerOOM, ControllerWorkerUnavailable) as exc:
+            return SupportResult("error", metadata={"error": repr(exc),
+                                                    "worker_failure": worker_failure_marker(exc)})
         except Exception as exc:
             return SupportResult("error", metadata={"error": repr(exc)})
 

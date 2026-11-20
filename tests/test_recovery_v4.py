@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from agent_support.autonomous_support import SupportBudget, SupportContext
+from agent_support.autonomous_support import (ControllerResponse, SupportBudget,
+    SupportContext, SupportDecision, SupportExecutor, SupportRequest,
+    SupportReservation, make_support_controller, run_support_loop)
+from agent_support.autonomous_operations import ReasonOverArtifacts
+from agent_support.controller_backend import ControllerWorkerOOM, ControllerWorkerUnavailable
+from agent_support.policy import parse_textcraft
 from agent_support.recovery_v4 import (AnalyzeFailures, RecoveryState, VerifyPrerequisites,
     SYSTEM, adaptive_loop, parse_decision, recovery_executor, run_recovery_episode)
 from agent_support.recovery_v4_eval import config_for, manifest
@@ -34,6 +39,17 @@ class Gpt:
     def generate(self, messages, max_new_tokens=None):
         self.messages.append(messages)
         return {"text": next(self.outputs), "raw_completion": "full Harmony",
+                "generation_status": "complete", "input_tokens": 20,
+                "output_tokens": 10, "inference_seconds": 0.1}
+
+
+class ErrorGpt(Gpt):
+    def generate(self, messages, max_new_tokens=None):
+        value = next(self.outputs)
+        if isinstance(value, Exception):
+            raise value
+        self.messages.append(messages)
+        return {"text": value, "raw_completion": "full Harmony",
                 "generation_status": "complete", "input_tokens": 20,
                 "output_tokens": 10, "inference_seconds": 0.1}
 
@@ -434,3 +450,288 @@ def test_two_malformed_final_headers_count_as_two_fallbacks():
     assert result["support_calls"] == 0 and result["environment_actions"] == 2
     assert [record["controller_fallback_detail"] for record in result["trace"]] == [
         "malformed_final_header", "malformed_final_header"]
+
+
+def test_controller_cuda_oom_terminates_episode_with_estimated_usage():
+    detail = "CUDA out of memory. Tried to allocate 2 GiB"
+    gpt = ErrorGpt([ControllerWorkerOOM(detail)])
+    config = config_for("autonomous_recovery_v4")
+    config["autonomous_support"]["operations"] = []
+    episode = Episode()
+    checkpoints = []
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": episode.initial_observation},
+        config, Qwen(), gpt, episode_factory=lambda *_: episode, checkpoint=checkpoints.append)
+    assert result["status"] == result["termination_reason"] == "controller_cuda_oom"
+    assert result["success"] is False and result["environment_actions"] == 0
+    assert episode.steps == [] and len(result["trace"]) == 1
+    assert result["qwen_model_calls"] == result["controller_model_calls"] == 1
+    assert result["controller_input_tokens"] == 20 and result["controller_output_tokens"] == 0
+    assert result["controller_errors"] == 1 and result["controller_fallbacks"] == 0
+    record = result["trace"][0]
+    assert record["proposed_action"] == "inventory" and record["action"] is None
+    assert record["termination_reason"] == "controller_cuda_oom"
+    assert record["support_trace"]["final_action"] is None
+    assert record["support_trace"]["termination_reason"] == "controller_cuda_oom"
+    event = record["support_trace"]["events"][0]
+    assert event["error_detail"] == detail and detail in event["error"]
+    assert event["usage_estimated"] is True
+    assert event["controller_cost"] == {"model_calls": 1, "input_tokens": 20,
+                                         "output_tokens": 0, "inference_seconds": 0.0}
+    assert record["support_budget_before"]["additional_model_calls"] == 0
+    assert record["support_budget_after"]["additional_model_calls"] == 1
+    assert checkpoints[-1]["environment_actions"] == 0
+    assert checkpoints[-1]["trace"][0]["action"] is None
+
+
+def test_controller_cuda_oom_after_prior_action_stops_further_steps():
+    gpt = ErrorGpt([choice("execute", action="inventory", expected_outcome="inventory feedback"),
+                    ControllerWorkerOOM("allocation failed")])
+    config = config_for("autonomous_recovery_v4")
+    config["autonomous_support"]["operations"] = []
+    episode = Episode()
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": episode.initial_observation},
+        config, Qwen(), gpt, episode_factory=lambda *_: episode)
+    assert result["status"] == "controller_cuda_oom"
+    assert episode.steps == ["inventory"]
+    assert result["environment_actions"] == 1 and result["model_decisions"] == 2
+    assert result["qwen_model_calls"] == result["controller_model_calls"] == 2
+    assert result["trace"][1]["action"] is None
+    assert result["trace"][1]["support_trace"]["events"][0]["usage_estimated"] is True
+
+
+def test_worker_oom_during_reservation_terminates_without_model_charge():
+    class OOMAtCount(ErrorGpt):
+        def count_messages_tokens(self, messages):
+            raise ControllerWorkerOOM("token-count allocation failed")
+
+    config = config_for("autonomous_recovery_v4")
+    config["autonomous_support"]["operations"] = []
+    episode = Episode()
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": episode.initial_observation},
+        config, Qwen(), OOMAtCount([]), episode_factory=lambda *_: episode)
+    assert result["status"] == "controller_cuda_oom" and episode.steps == []
+    assert result["environment_actions"] == 0 and result["controller_model_calls"] == 0
+    event = result["trace"][0]["support_trace"]["events"][0]
+    assert event["stage"] == "reservation"
+    assert event["error_detail"] == "token-count allocation failed"
+
+
+def test_worker_oom_during_support_reservation_is_terminal():
+    class OOMSupport:
+        operation_id = "oom_support_v1"
+        description = "Model-backed support that fails while counting tokens"
+        argument_schema = {}
+        model_calls_per_use = 1
+
+        def validate_arguments(self, arguments, context):
+            assert arguments == {}
+
+        def reservation(self, arguments, context):
+            raise ControllerWorkerOOM("support token-count allocation failed")
+
+    gpt = Gpt([choice("request", operation="oom_support_v1", arguments={},
+                      uncertainty="unknown", expected_information="evidence")])
+    config = config_for("autonomous_recovery_v4")
+    episode = Episode()
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": episode.initial_observation},
+        config, Qwen(), gpt, episode_factory=lambda *_: episode,
+        executor=SupportExecutor({"oom_support_v1": OOMSupport()}))
+    assert result["status"] == "controller_cuda_oom" and episode.steps == []
+    assert result["environment_actions"] == result["support_calls"] == 0
+    assert result["controller_model_calls"] == 1
+    event = result["trace"][0]["support_trace"]["events"][0]
+    assert event["stage"] == "support_reservation"
+    assert event["request"]["operation"] == "oom_support_v1"
+    assert event["error_detail"] == "support token-count allocation failed"
+
+
+def test_non_oom_backend_error_still_uses_qwen_fallback():
+    gpt = ErrorGpt([RuntimeError("CUDA out of memory text in a non-OOM error")])
+    config = config_for("autonomous_recovery_v4")
+    config["max_actions"] = config["max_decisions"] = 1
+    config["autonomous_support"]["operations"] = []
+    episode = Episode()
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": episode.initial_observation},
+        config, Qwen(), gpt, episode_factory=lambda *_: episode)
+    assert episode.steps == ["inventory"] and result["environment_actions"] == 1
+    assert result["controller_fallbacks"] == result["controller_errors"] == 1
+    assert result["trace"][0]["controller_fallback_reason"] == "controller_backend_error"
+    assert result["trace"][0]["support_trace"]["termination_reason"] == "controller_backend_error"
+
+
+def test_expanded_v3_controller_oom_keeps_existing_fallback():
+    gpt = ErrorGpt([ControllerWorkerOOM("CUDA allocation failed")])
+    config = config_for("expanded_v3_v1")
+    config["max_actions"] = config["max_decisions"] = 1
+    episode = Episode()
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": episode.initial_observation},
+        config, Qwen(), gpt, episode_factory=lambda *_: episode,
+        controller=make_support_controller(config, gpt), executor=SupportExecutor({}))
+    assert episode.steps == ["inventory"] and result["environment_actions"] == 1
+    assert result["trace"][0]["support_trace"]["termination_reason"] == "controller_backend_error"
+    assert result["status"] == "max_actions"
+
+
+def test_reason_over_artifacts_oom_preserves_cost_and_stops_v4():
+    detail = "support generation CUDA allocation failed"
+    gpt = ErrorGpt([
+        choice("request", operation="reason_over_artifacts_v1",
+               arguments={"objective": "inspect evidence", "output_type": "plan"},
+               uncertainty="which plan works", expected_information="evidence-based plan"),
+        ControllerWorkerOOM(detail),
+    ])
+    config = config_for("autonomous_recovery_v4")
+    config["autonomous_support"]["operations"] = ["reason_over_artifacts_v1"]
+    episode = Episode()
+    checkpoints = []
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": episode.initial_observation},
+        config, Qwen(), gpt, episode_factory=lambda *_: episode, checkpoint=checkpoints.append)
+    assert result["status"] == "controller_cuda_oom" and episode.steps == []
+    assert result["environment_actions"] == 0 and result["controller_fallbacks"] == 0
+    assert result["controller_model_calls"] == result["support_model_calls"] == 1
+    assert result["support_calls"] == 1 and result["model_calls"] == 3
+    assert result["controller_input_tokens"] == result["support_input_tokens"] == 20
+    event = result["trace"][0]["support_trace"]["events"][0]
+    assert event["request"]["operation"] == "reason_over_artifacts_v1"
+    assert event["result"]["status"] == "error"
+    assert event["result"]["cost"] == {"model_calls": 1, "input_tokens": 20,
+                                         "output_tokens": 0, "inference_seconds": 0.0}
+    assert event["result"]["metadata"]["worker_failure"] == {"kind": "cuda_oom", "detail": detail}
+    assert event["error_detail"] == detail
+    assert result["recovery_state_final"]["support_findings"][0]["status"] == "error"
+    assert result["trace"][0]["action"] is None
+    assert checkpoints[-1]["trace"][0]["support_trace"]["events"][0]["result"] == event["result"]
+
+
+@pytest.mark.parametrize("failure,status,kind", [
+    (ControllerWorkerOOM("registered support OOM"), "controller_cuda_oom", "cuda_oom"),
+    (ControllerWorkerUnavailable("registered support stream closed"),
+     "controller_worker_unavailable", "unavailable"),
+])
+def test_registered_support_worker_failure_uses_reserved_cost_once(failure, status, kind):
+    class BrokenSupport:
+        operation_id = "broken_support_v1"
+        description = "Registered model support"
+        argument_schema = {}
+        model_calls_per_use = 1
+
+        def validate_arguments(self, arguments, context):
+            assert arguments == {}
+
+        def reservation(self, arguments, context):
+            return SupportReservation(1, 13, 64)
+
+        def execute(self, arguments, context):
+            raise failure
+
+    gpt = Gpt([choice("request", operation="broken_support_v1", arguments={})])
+    config = config_for("autonomous_recovery_v4")
+    episode = Episode()
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": episode.initial_observation},
+        config, Qwen(), gpt, episode_factory=lambda *_: episode,
+        executor=SupportExecutor({"broken_support_v1": BrokenSupport()}))
+    assert result["status"] == status and episode.steps == []
+    assert result["controller_model_calls"] == result["support_model_calls"] == 1
+    assert result["support_calls"] == 1 and result["model_calls"] == 3
+    assert result["support_input_tokens"] == 13 and result["support_output_tokens"] == 0
+    event = result["trace"][0]["support_trace"]["events"][0]
+    assert event["result"]["cost"] == {"model_calls": 1, "input_tokens": 13,
+                                         "output_tokens": 0, "inference_seconds": 0.0}
+    assert event["result"]["metadata"]["usage_estimated"] is True
+    assert event["result"]["metadata"]["worker_failure"] == {"kind": kind, "detail": failure.detail}
+    assert event["error_detail"] == failure.detail
+    assert result["trace"][0]["action"] is None
+
+
+def test_support_oom_after_nonfailed_environment_action_stops_next_action():
+    class NonfailedInventory(Episode):
+        def step(self, action):
+            if action != "inventory":
+                return super().step(action)
+            self.steps.append(action)
+            self.observation = "Inventory: empty"
+            return {"observation": self.observation, "done": False,
+                    "success": False, "failed_action": False}
+
+    gpt = ErrorGpt([
+        choice("execute", action="inventory", expected_outcome="visible inventory"),
+        choice("request", operation="reason_over_artifacts_v1",
+               arguments={"objective": "inspect evidence", "output_type": "plan"}),
+        ControllerWorkerOOM("support allocation failed"),
+    ])
+    config = config_for("autonomous_recovery_v4")
+    config["autonomous_support"]["operations"] = ["reason_over_artifacts_v1"]
+    episode = NonfailedInventory()
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": episode.initial_observation},
+        config, Qwen(), gpt, episode_factory=lambda *_: episode)
+    assert result["status"] == "controller_cuda_oom"
+    assert episode.steps == ["inventory"] and result["failed_actions"] == 0
+    assert result["environment_actions"] == 1 and result["model_decisions"] == 2
+    assert result["trace"][1]["action"] is None
+
+
+@pytest.mark.parametrize("at_count", [False, True])
+def test_worker_unavailable_stops_v4_controller_without_fallback(at_count):
+    class UnavailableAtCount(ErrorGpt):
+        def count_messages_tokens(self, messages):
+            if at_count:
+                raise ControllerWorkerUnavailable("worker exited")
+            return 20
+
+    gpt = UnavailableAtCount([ControllerWorkerUnavailable("worker closed protocol stream")])
+    config = config_for("autonomous_recovery_v4")
+    config["autonomous_support"]["operations"] = []
+    episode = Episode()
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": episode.initial_observation},
+        config, Qwen(), gpt, episode_factory=lambda *_: episode)
+    assert result["status"] == "controller_worker_unavailable" and episode.steps == []
+    assert result["environment_actions"] == result["controller_fallbacks"] == 0
+    assert result["controller_model_calls"] == (0 if at_count else 1)
+    event = result["trace"][0]["support_trace"]["events"][0]
+    assert event["error_detail"] == ("worker exited" if at_count else "worker closed protocol stream")
+    assert result["trace"][0]["action"] is None
+
+
+def test_non_oom_reason_support_error_still_allows_next_decision():
+    gpt = ErrorGpt([
+        choice("request", operation="reason_over_artifacts_v1",
+               arguments={"objective": "inspect evidence", "output_type": "plan"}),
+        RuntimeError("ordinary support failure"),
+        choice("execute", action="get 1 log", expected_outcome="collect log"),
+    ])
+    config = config_for("autonomous_recovery_v4")
+    config["autonomous_support"]["operations"] = ["reason_over_artifacts_v1"]
+    episode = Episode()
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": episode.initial_observation},
+        config, Qwen(), gpt, episode_factory=lambda *_: episode)
+    assert result["status"] == "success" and episode.steps == ["get 1 log"]
+    assert result["support_calls"] == 1 and result["controller_fallbacks"] == 0
+    event = result["trace"][0]["support_trace"]["events"][0]
+    assert event["result"]["status"] == "error"
+    assert "worker_failure" not in event["result"]["metadata"]
+
+
+def test_expanded_v3_reason_support_oom_keeps_support_failure_fallback():
+    class RequestController:
+        controller_id = "test_request_controller"
+
+        def reservation(self, context):
+            return SupportReservation()
+
+        def decide(self, context):
+            request = SupportRequest("reason_over_artifacts_v1",
+                {"objective": "inspect evidence", "output_type": "plan"})
+            return ControllerResponse(SupportDecision("request", request=request))
+
+    gpt = ErrorGpt([ControllerWorkerOOM("support allocation failed")])
+    config = config_for("expanded_v3_v1")
+    operation = ReasonOverArtifacts(config, gpt)
+    context = SupportContext("textcraft", "dev", Episode().task_prompt,
+        Episode().observation, (), (), 1, "inventory", "inventory")
+    budget = SupportBudget(7, 100, 500, 3000000, 10)
+    trace = run_support_loop(RequestController(),
+        SupportExecutor({"reason_over_artifacts_v1": operation}), budget, context, parse_textcraft)
+    assert trace.termination_reason == "support_failure"
+    assert trace.final_action == "inventory" and trace.operation_count == 1
+    assert trace.events[0]["result"]["status"] == "error"
+    assert budget.support_model_calls_used == 1

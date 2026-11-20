@@ -14,9 +14,13 @@ from .autonomous_support import (ControllerResponse, SupportBudget, SupportConte
                                  make_support_executor, run_support_loop,
                                  visible_state_digest)
 from .benchmarks import make_episode
+from .controller_backend import ControllerWorkerOOM, ControllerWorkerUnavailable
 from .policy import parse_textcraft, textcraft_messages
 
 ARMS = ("expanded_v3_v1", "autonomous_recovery_v4")
+WORKER_FAILURE_REASONS = {"cuda_oom": "controller_cuda_oom",
+                          "unavailable": "controller_worker_unavailable"}
+TERMINAL_WORKER_STATUSES = frozenset(WORKER_FAILURE_REASONS.values())
 REPAIR_VERSION = "autonomous_recovery_v4_protocol_v2"
 STATE_FIELDS = ("subgoal", "strategy", "plan", "hypotheses", "uncertainties",
                 "attempted_approaches", "expected_outcome")
@@ -332,6 +336,12 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
             if reason := budget.block_reason(reservation):
                 trace.termination_reason = reason
                 return trace, reason
+        except (ControllerWorkerOOM, ControllerWorkerUnavailable) as exc:
+            trace.events.append({"error": repr(exc), "error_detail": exc.detail,
+                                 "stage": "reservation"})
+            trace.final_action = None
+            trace.termination_reason = exc.termination_reason
+            return trace, exc.termination_reason
         except Exception as exc:
             trace.events.append({"error": repr(exc), "stage": "reservation"})
             trace.termination_reason = "controller_error"
@@ -341,6 +351,16 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
         trace.controller_decisions += 1
         try:
             generation = model.generate(messages, max_new_tokens=reservation.output_tokens)
+        except (ControllerWorkerOOM, ControllerWorkerUnavailable) as exc:
+            # Generation usage is unavailable; charge the reserved input and one call.
+            estimated = SupportCost(1, input_count, 0)
+            budget.charge("controller", estimated, reservation)
+            event.update(error=repr(exc), error_detail=exc.detail,
+                         usage_estimated=True, controller_cost=estimated.as_dict())
+            trace.events.append(event)
+            trace.final_action = None
+            trace.termination_reason = exc.termination_reason
+            return trace, exc.termination_reason
         except Exception as exc:
             # The attempt is visible even when backend usage cannot be recovered.
             budget.charge("controller", SupportCost(1, input_count, 0), reservation)
@@ -387,6 +407,13 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
             request = SupportRequest(choice["operation"], choice["arguments"], choice["uncertainty"])
             try:
                 operation, operation_reservation = executor.prepare(request, current)
+            except (ControllerWorkerOOM, ControllerWorkerUnavailable) as exc:
+                event.update(request=request.as_dict(), error=repr(exc),
+                             error_detail=exc.detail, stage="support_reservation")
+                trace.events.append(event)
+                trace.final_action = None
+                trace.termination_reason = exc.termination_reason
+                return trace, exc.termination_reason
             except (ValueError, KeyError, TypeError) as exc:
                 event["parse_error"] = f"support arguments for {request.operation}: {exc}"
                 trace.events.append(event)
@@ -443,6 +470,14 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
                 trace.termination_reason = reason
                 return trace, reason
             result = executor.execute(operation, request, current)
+            worker_failure = result.metadata.get("worker_failure")
+            worker_stop = (WORKER_FAILURE_REASONS.get(worker_failure.get("kind"))
+                           if isinstance(worker_failure, dict) else None)
+            if worker_stop and result.cost.model_calls == 0 and operation_reservation.model_calls:
+                result = replace(result,
+                    cost=SupportCost(operation_reservation.model_calls,
+                                     operation_reservation.input_tokens, 0),
+                    metadata={**result.metadata, "usage_estimated": True})
             budget.charge("support", result.cost, operation_reservation)
         except Exception as exc:
             event["error"] = repr(exc)
@@ -463,8 +498,15 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
         event["result"] = result.as_dict()
         state.add_support(request, result, choice["uncertainty"], choice["expected_information"])
         pending = state.support_findings[-1]
+        if worker_stop:
+            event["error"] = result.metadata.get("backend_error", result.metadata.get("error"))
+            event["error_detail"] = worker_failure.get("detail")
         event["recovery_state_after"] = state.snapshot()
         trace.events.append(event)
+        if worker_stop:
+            trace.final_action = None
+            trace.termination_reason = worker_stop
+            return trace, worker_stop
         current = replace(current, results=current.results + (result,),
                           support_history=(current.support_history + ({
                               "decision": context.decision, "operation": request.operation,
@@ -578,7 +620,8 @@ def run_recovery_episode(task: dict, config: dict, qwen, gpt, *, memory=None,
                       "support_budget_after": budget.as_dict()["used"],
                       "recovery_state": state.snapshot() if arm == ARMS[1] else None}
             if stop and stop not in {"wall_time_budget", "inference_time_budget",
-                                     "no_viable_strategy", "budget_exhausted"}:
+                                     "no_viable_strategy", "budget_exhausted",
+                                     *TERMINAL_WORKER_STATUSES}:
                 record["controller_fallback_reason"] = stop
                 record["controller_fallback_detail"] = next((
                     event.get("parse_error") or event.get("error")
@@ -589,6 +632,9 @@ def run_recovery_episode(task: dict, config: dict, qwen, gpt, *, memory=None,
                 stop = None
             if stop:
                 status = stop
+                if stop in TERMINAL_WORKER_STATUSES:
+                    record["action"] = None
+                    record["termination_reason"] = stop
                 append_record(record)
                 break
             used_inference = qwen_seconds + budget.controller_inference_seconds + budget.support_inference_seconds

@@ -10,6 +10,32 @@ import subprocess
 from pathlib import Path
 
 
+class ControllerWorkerOOM(RuntimeError):
+    """A worker-reported CUDA out-of-memory failure."""
+
+    failure_kind = "cuda_oom"
+    termination_reason = "controller_cuda_oom"
+
+    def __init__(self, detail: str):
+        self.detail = detail
+        super().__init__(f"GPT-OSS controller worker OutOfMemoryError: {detail}")
+
+
+class ControllerWorkerUnavailable(RuntimeError):
+    """A definitively closed or exited controller worker."""
+
+    failure_kind = "unavailable"
+    termination_reason = "controller_worker_unavailable"
+
+    def __init__(self, detail: str):
+        self.detail = detail
+        super().__init__(f"GPT-OSS controller worker unavailable: {detail}")
+
+
+def worker_failure_marker(exc: ControllerWorkerOOM | ControllerWorkerUnavailable) -> dict:
+    return {"kind": exc.failure_kind, "detail": exc.detail}
+
+
 class GptOssControllerWorker:
     def __init__(self, spec: dict, log_dir: str | Path):
         variable = spec["python_env"]
@@ -47,20 +73,45 @@ class GptOssControllerWorker:
             raise
 
     def _request(self, payload: dict) -> dict:
-        if self.closed or self.process.poll() is not None:
-            raise RuntimeError("GPT-OSS controller worker is unavailable")
-        assert self.process.stdin is not None and self.process.stdout is not None
-        self.process.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
-        self.process.stdin.flush()
-        ready, _, _ = select.select([self.process.stdout], [], [], self.timeout)
+        if self.closed:
+            raise ControllerWorkerUnavailable("worker is closed")
+        if getattr(self, "unusable", False):
+            raise ControllerWorkerUnavailable("worker was terminated")
+        exit_code = self.process.poll()
+        if exit_code is not None:
+            raise ControllerWorkerUnavailable(f"worker exited with code {exit_code}")
+        stdin, stdout = self.process.stdin, self.process.stdout
+        if (stdin is None or stdout is None or stdin.closed or stdout.closed):
+            raise ControllerWorkerUnavailable("protocol stream is closed")
+        try:
+            stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            stdin.flush()
+        except (BrokenPipeError, OSError, ValueError) as exc:
+            if isinstance(exc, BrokenPipeError) or stdin.closed or self.process.poll() is not None:
+                raise ControllerWorkerUnavailable(f"protocol write failed: {exc}") from exc
+            raise
+        try:
+            ready, _, _ = select.select([stdout], [], [], self.timeout)
+        except (OSError, ValueError) as exc:
+            if stdout.closed or self.process.poll() is not None:
+                raise ControllerWorkerUnavailable(f"protocol stream closed: {exc}") from exc
+            raise
         if not ready:
             self.process.terminate()
-            raise TimeoutError("GPT-OSS controller worker timed out")
-        line = self.process.stdout.readline()
+            self.unusable = True
+            raise ControllerWorkerUnavailable("worker timed out and was terminated")
+        try:
+            line = stdout.readline()
+        except (OSError, ValueError) as exc:
+            if stdout.closed or self.process.poll() is not None:
+                raise ControllerWorkerUnavailable(f"protocol read failed: {exc}") from exc
+            raise
         if not line:
-            raise RuntimeError("GPT-OSS controller worker closed its protocol stream")
+            raise ControllerWorkerUnavailable("worker closed its protocol stream")
         result = json.loads(line)
         if not result.get("ok"):
+            if result.get("error_type") == "OutOfMemoryError":
+                raise ControllerWorkerOOM(result.get("error"))
             raise RuntimeError(f"GPT-OSS controller worker {result.get('error_type')}: {result.get('error')}")
         return result
 

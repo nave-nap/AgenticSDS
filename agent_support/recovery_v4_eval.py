@@ -18,7 +18,8 @@ from .controller_backend import GptOssControllerWorker
 from .heldout50_evaluation import FROZEN_SHA256, RECIPE_SHA256
 from .gpt_oss_model import extract_decoded_final_v3
 from .model import QwenModel
-from .recovery_v4 import ARMS, REPAIR_VERSION, parse_decision, run_recovery_episode
+from .recovery_v4 import (ARMS, REPAIR_VERSION, TERMINAL_WORKER_STATUSES,
+                          parse_decision, run_recovery_episode)
 from .runner import package_versions
 from .trajectory_memory import MPNetEmbedder
 
@@ -290,7 +291,12 @@ def _run_tasks(root: Path, arm: str, indices: list[int], plan: dict,
             meta["completed_task_count"] += 1
             write_json_atomic(run_dir / "run.json", meta)
             print(f"{task['task_id']} {result['status']} actions={result['environment_actions']}", flush=True)
-        meta["status"] = "complete"
+            if arm == ARMS[1] and result["status"] in TERMINAL_WORKER_STATUSES:
+                meta.update(status="stopped_worker_failure", stop_reason=result["status"])
+                write_json_atomic(run_dir / "run.json", meta)
+                break
+        else:
+            meta["status"] = "complete"
     except Exception as exc:
         meta.update(status="failed", error=repr(exc))
         raise
