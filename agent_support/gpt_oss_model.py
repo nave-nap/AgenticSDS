@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import importlib.metadata
 import hashlib
+import os
 import random
 import re
 import time
 
 from packaging.version import Version
+
+from .gpu_memory_diagnostics import DIRECTORY_ENV, GpuMemoryDiagnostics, enabled
 
 
 
@@ -310,6 +313,10 @@ class GptOss20BModel:
             mxfp4_integration.Mxfp4GptOssExperts, cuda_index=0)
         self.peak_gpu_memory_bytes = int(torch.cuda.max_memory_allocated(0))
         self.peak_gpu_reserved_bytes = int(torch.cuda.max_memory_reserved(0))
+        directory = os.environ.get(DIRECTORY_ENV) if enabled() else None
+        self.memory_diagnostics = (GpuMemoryDiagnostics(directory, "gpt_oss_cuda_memory", torch)
+                                   if directory else None)
+        self._diagnostic_request_id = 0
 
     def metadata(self) -> dict:
         return {"model_type": "gpt_oss_20b", "model_id": self.model_id,
@@ -349,32 +356,53 @@ class GptOss20BModel:
         return int(inputs["input_ids"].shape[1])
 
     def generate(self, messages: list[dict], max_new_tokens: int | None = None) -> dict:
-        inputs = self._encode_messages(messages, tensors=True).to(self.model.device)
-        input_ids = inputs["input_ids"]
         limit = self.max_new_tokens if max_new_tokens is None else max_new_tokens
-        self.torch.cuda.synchronize(0)
-        started = time.perf_counter()
-        with self.torch.inference_mode():
-            output = self.model.generate(
-                **inputs, do_sample=True, temperature=self.temperature,
-                top_p=self.top_p, top_k=self.top_k, max_new_tokens=limit,
-                eos_token_id=self.return_token_id,
-                pad_token_id=self.tokenizer.pad_token_id)
-        self.torch.cuda.synchronize(0)
-        elapsed = round(time.perf_counter() - started, 3)
-        generated_ids = output[0][input_ids.shape[1]:].tolist()
-        parsed = parse_configured_completion(self.tokenizer, generated_ids, limit,
-                                             self.completion_parser)
-        self.peak_gpu_memory_bytes = max(self.peak_gpu_memory_bytes,
-                                         int(self.torch.cuda.max_memory_allocated(0)))
-        self.peak_gpu_reserved_bytes = max(self.peak_gpu_reserved_bytes,
-                                           int(self.torch.cuda.max_memory_reserved(0)))
-        return {**parsed, "input_tokens": int(input_ids.shape[1]),
-                "output_tokens": len(generated_ids), "inference_seconds": elapsed,
-                "generation_prompt_tail": self.tokenizer.decode(input_ids[0][-32:].tolist(),
-                                                                  skip_special_tokens=False),
-                "last_generated_token_id": generated_ids[-1] if generated_ids else None,
-                "stopped_by_final_return": bool(generated_ids and generated_ids[-1] == self.return_token_id),
-                "hit_token_limit": len(generated_ids) >= limit,
-                "peak_gpu_memory_allocated_bytes": self.peak_gpu_memory_bytes,
-                "peak_gpu_memory_reserved_bytes": self.peak_gpu_reserved_bytes}
+        diagnostics = self.memory_diagnostics
+        request_id = None
+        if diagnostics is not None:
+            self._diagnostic_request_id += 1
+            request_id = self._diagnostic_request_id
+            before = diagnostics.start(request_id, limit)
+            # Keep the historical since-load high-water fields despite per-request resets.
+            self.peak_gpu_memory_bytes = max(self.peak_gpu_memory_bytes,
+                                             before.get("peak_allocated_bytes", 0))
+            self.peak_gpu_reserved_bytes = max(self.peak_gpu_reserved_bytes,
+                                               before.get("peak_reserved_bytes", 0))
+        input_count = None
+        error_type = None
+        try:
+            inputs = self._encode_messages(messages, tensors=True).to(self.model.device)
+            input_ids = inputs["input_ids"]
+            input_count = int(input_ids.shape[1])
+            self.torch.cuda.synchronize(0)
+            started = time.perf_counter()
+            with self.torch.inference_mode():
+                output = self.model.generate(
+                    **inputs, do_sample=True, temperature=self.temperature,
+                    top_p=self.top_p, top_k=self.top_k, max_new_tokens=limit,
+                    eos_token_id=self.return_token_id,
+                    pad_token_id=self.tokenizer.pad_token_id)
+            self.torch.cuda.synchronize(0)
+            elapsed = round(time.perf_counter() - started, 3)
+            generated_ids = output[0][input_ids.shape[1]:].tolist()
+            parsed = parse_configured_completion(self.tokenizer, generated_ids, limit,
+                                                 self.completion_parser)
+            self.peak_gpu_memory_bytes = max(self.peak_gpu_memory_bytes,
+                                             int(self.torch.cuda.max_memory_allocated(0)))
+            self.peak_gpu_reserved_bytes = max(self.peak_gpu_reserved_bytes,
+                                               int(self.torch.cuda.max_memory_reserved(0)))
+            return {**parsed, "input_tokens": input_count,
+                    "output_tokens": len(generated_ids), "inference_seconds": elapsed,
+                    "generation_prompt_tail": self.tokenizer.decode(input_ids[0][-32:].tolist(),
+                                                                      skip_special_tokens=False),
+                    "last_generated_token_id": generated_ids[-1] if generated_ids else None,
+                    "stopped_by_final_return": bool(generated_ids and generated_ids[-1] == self.return_token_id),
+                    "hit_token_limit": len(generated_ids) >= limit,
+                    "peak_gpu_memory_allocated_bytes": self.peak_gpu_memory_bytes,
+                    "peak_gpu_memory_reserved_bytes": self.peak_gpu_reserved_bytes}
+        except Exception as exc:
+            error_type = type(exc).__name__
+            raise
+        finally:
+            if diagnostics is not None:
+                diagnostics.finish(request_id, input_count, limit, error_type)

@@ -9,6 +9,8 @@ import select
 import subprocess
 from pathlib import Path
 
+from .gpu_memory_diagnostics import DIRECTORY_ENV, enabled
+
 
 class ControllerWorkerOOM(RuntimeError):
     """A worker-reported CUDA out-of-memory failure."""
@@ -52,6 +54,8 @@ class GptOssControllerWorker:
             environment["HF_HOME"] = os.environ[hf_variable]
         root = str(Path(__file__).resolve().parent.parent)
         environment["PYTHONPATH"] = root + os.pathsep + environment.get("PYTHONPATH", "")
+        if enabled():
+            environment[DIRECTORY_ENV] = str(Path(log_dir).parent / "diagnostics")
         log_path = Path(log_dir) / "gpt_oss_controller_worker.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         self.log = log_path.open("a", encoding="utf-8")

@@ -17,6 +17,7 @@ from .common import canonical_digest, read_json, validate_manifest, write_json_a
 from .controller_backend import GptOssControllerWorker
 from .heldout50_evaluation import FROZEN_SHA256, RECIPE_SHA256
 from .gpt_oss_model import extract_decoded_final_v3
+from .gpu_memory_diagnostics import enabled as gpu_memory_diagnostics_enabled
 from .model import QwenModel
 from .recovery_v4 import (ARMS, REPAIR_VERSION, TERMINAL_WORKER_STATUSES,
                           parse_decision, run_recovery_episode)
@@ -278,6 +279,10 @@ def _run_tasks(root: Path, arm: str, indices: list[int], plan: dict,
             raise ValueError("Recovery evaluation requires an L40S")
         write_json_atomic(run_dir / "run.json", meta)
         qwen = qwen_factory(config)
+        if gpu_memory_diagnostics_enabled():
+            configure_diagnostics = getattr(qwen, "enable_gpu_memory_diagnostics", None)
+            if callable(configure_diagnostics):
+                configure_diagnostics(run_dir / "diagnostics")
         memory = memory_factory(config, qwen)
         for index in indices:
             task = tasks[index]
