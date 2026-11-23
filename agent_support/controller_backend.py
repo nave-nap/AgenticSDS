@@ -125,6 +125,10 @@ class GptOssControllerWorker:
     def count_messages_tokens(self, messages: list[dict]) -> int:
         return self._request({"op": "count_messages_tokens", "messages": messages})["count"]
 
+    def probe_input(self, messages: list[dict]) -> dict:
+        """Diagnostic-only token fingerprint and active attention backend."""
+        return self._request({"op": "probe_input", "messages": messages})["probe"]
+
     def generate(self, messages: list[dict], max_new_tokens: int | None = None) -> dict:
         return self._request({"op": "generate", "messages": messages,
                               "max_new_tokens": max_new_tokens})["generation"]

@@ -32,6 +32,10 @@ def serve(source=None, sink=None, model_factory=None) -> None:
                 if model is None:
                     raise ValueError("Controller model is not initialized")
                 response = {"ok": True, "count": model.count_messages_tokens(request["messages"])}
+            elif op == "probe_input":
+                if model is None:
+                    raise ValueError("Controller model is not initialized")
+                response = {"ok": True, "probe": model.probe_input(request["messages"])}
             elif op == "generate":
                 if model is None:
                     raise ValueError("Controller model is not initialized")

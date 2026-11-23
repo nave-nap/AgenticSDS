@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import hashlib
+import json
 import os
 import random
 import re
@@ -16,6 +17,22 @@ import time
 from packaging.version import Version
 
 from .gpu_memory_diagnostics import DIRECTORY_ENV, GpuMemoryDiagnostics, enabled
+
+FLEX_ATTENTION_ENV = "AGENT_SUPPORT_GPTOSS_FLEX_ATTENTION"
+
+
+def attention_load_kwargs(torch_api) -> dict:
+    """Opt in to the pinned GPT-OSS model's sink-aware FlexAttention path."""
+    setting = os.environ.get(FLEX_ATTENTION_ENV, "0")
+    if setting not in {"0", "1"}:
+        raise ValueError(f"{FLEX_ATTENTION_ENV} must be 0 or 1")
+    if setting == "0":
+        return {}
+    from transformers.utils import is_torch_flex_attn_available
+
+    if not is_torch_flex_attn_available() or torch_api.cuda.get_device_capability(0) < (8, 0):
+        raise RuntimeError("GPT-OSS FlexAttention requires a compatible PyTorch CUDA runtime and GPU")
+    return {"attn_implementation": "flex_attention"}
 
 
 
@@ -305,7 +322,12 @@ class GptOss20BModel:
             raise RuntimeError("GPT-OSS tokenizer lacks the Harmony final-return token")
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_id, device_map={"": 0}, dtype="auto", low_cpu_mem_usage=True,
+            **attention_load_kwargs(torch),
             **revision)
+        self.flex_attention_enabled = os.environ.get(FLEX_ATTENTION_ENV, "0") == "1"
+        if (self.flex_attention_enabled and
+                self.model.config._attn_implementation != "flex_attention"):
+            raise RuntimeError("GPT-OSS did not activate the requested FlexAttention backend")
         self.model.eval()
         from transformers.integrations import mxfp4 as mxfp4_integration
         self.quantization_verification = verify_packed_mxfp4(
@@ -322,6 +344,8 @@ class GptOss20BModel:
         return {"model_type": "gpt_oss_20b", "model_id": self.model_id,
                 "model_revision": self.model_revision, "tokenizer_revision": self.model_revision,
                 "backend": "transformers", "backend_version": self.backend_version,
+                **({"attention_implementation": "flex_attention"}
+                   if self.flex_attention_enabled else {}),
                 "quantization": "mxfp4_packed", **self.quantization_verification,
                 "chat_template": "pinned_tokenizer_harmony", "prompt_date": self.prompt_date,
                 "chat_template_sha256": hashlib.sha256(self.chat_template.encode()).hexdigest(),
@@ -354,6 +378,13 @@ class GptOss20BModel:
     def count_messages_tokens(self, messages: list[dict]) -> int:
         inputs = self._encode_messages(messages, tensors=True)
         return int(inputs["input_ids"].shape[1])
+
+    def probe_input(self, messages: list[dict]) -> dict:
+        """Fingerprint the exact token sequence for an explicit probe request."""
+        ids = self._encode_messages(messages, tensors=False)
+        return {"input_tokens": len(ids), "input_ids_sha256": hashlib.sha256(
+            json.dumps(ids, separators=(",", ":")).encode()).hexdigest(),
+            "attention_implementation": self.model.config._attn_implementation}
 
     def release_cuda_cache(self) -> None:
         """Release unused allocator blocks after a completed worker request."""
