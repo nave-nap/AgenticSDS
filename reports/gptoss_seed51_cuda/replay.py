@@ -60,12 +60,12 @@ def verify_worker(actual: dict, archived: dict, backend: str) -> None:
             "torch_cuda_version", "triton_version", "kernels_version",
             "quantization", "quantization_method", "decoding", "reasoning_effort",
             "prompt_date", "chat_template_sha256", "gpu_name",
-            "gpu_compute_capability", "gpu_total_memory_bytes")
+            "gpu_compute_capability")
     differences = [key for key in keys if actual.get(key) != archived.get(key)]
     active = actual.get("attention_implementation")
+    expected_attention = "flex_attention" if backend == "flex_attention" else "eager"
     if (differences or actual.get("gpu_name") != "NVIDIA L40S" or
-            (backend == "flex_attention" and active != "flex_attention") or
-            (backend == "default" and active == "flex_attention") or not active):
+            active != expected_attention):
         raise RuntimeError(f"Worker identity differs: {differences}; active attention={active}")
 
 
@@ -124,6 +124,9 @@ def run(plan: dict, backend: str, output_dir: Path, *, worker_factory=None,
         worker = worker_factory(config["autonomous_support"]["model"],
                                 output_dir / "workers")
         report["worker_metadata"] = worker.metadata()
+        report["gpu_total_memory_bytes"] = {
+            "archived": plan["worker_metadata"].get("gpu_total_memory_bytes"),
+            "active": worker.metadata().get("gpu_total_memory_bytes")}
         verify_worker(worker.metadata(), plan["worker_metadata"], backend)
         qwen = qwen_factory(config)
         enable_diagnostics = getattr(qwen, "enable_gpu_memory_diagnostics", None)

@@ -32,6 +32,7 @@ def synthetic_plan():
             "total_controller_requests": 10,
             "evaluator_package_versions": {"textcraft": "0.0.3"},
             "worker_metadata": {"gpu_name": "NVIDIA L40S",
+                                "gpu_total_memory_bytes": 47676129280,
                                 "attention_implementation": "flex_attention"},
             "decisions": [{"decision": decision,
                            "qwen_messages": [{"role": "user", "content": "task"}],
@@ -45,6 +46,39 @@ def test_plan_accepts_ten_hashed_inputs_and_rejects_mutation():
     plan["decisions"][1]["controller_requests"][1]["messages"][0]["content"] = "changed"
     with pytest.raises(ValueError, match="changed"):
         replay.validate_plan(plan)
+
+
+def test_worker_accepts_l40s_memory_variation_but_checks_backend_and_identity():
+    archived = {"model_id": "openai/gpt-oss-20b", "model_revision": "fixed",
+        "backend_version": "5.22.2", "torch_version": "2.8.0+cu128",
+        "torch_cuda_version": "12.8", "triton_version": "3.4.0",
+        "kernels_version": "0.17.2", "quantization": "mxfp4_packed",
+        "quantization_method": "mxfp4", "decoding": {"do_sample": True,
+            "temperature": 1.0, "top_p": 1.0, "top_k": 0, "max_new_tokens": 1024},
+        "reasoning_effort": "low", "prompt_date": "2026-11-18",
+        "chat_template_sha256": "template", "gpu_name": "NVIDIA L40S",
+        "gpu_compute_capability": [8, 9],
+        "gpu_total_memory_bytes": 47676129280,
+        "attention_implementation": "flex_attention"}
+    eager = {**archived, "gpu_total_memory_bytes": 47673671680,
+             "attention_implementation": "eager"}
+    replay.verify_worker(eager, archived, "default")
+    replay.verify_worker(archived, archived, "flex_attention")
+    with pytest.raises(RuntimeError, match="active attention"):
+        replay.verify_worker({**eager, "attention_implementation": "sdpa"}, archived,
+                             "default")
+    with pytest.raises(RuntimeError, match="model_revision"):
+        replay.verify_worker({**eager, "model_revision": "different"}, archived,
+                             "default")
+    with pytest.raises(RuntimeError, match="torch_version"):
+        replay.verify_worker({**eager, "torch_version": "different"}, archived,
+                             "default")
+    with pytest.raises(RuntimeError, match="decoding"):
+        replay.verify_worker({**eager, "decoding": {"temperature": 0.5}}, archived,
+                             "default")
+    with pytest.raises(RuntimeError, match="gpu_compute_capability"):
+        replay.verify_worker({**eager, "gpu_compute_capability": [7, 5]}, archived,
+                             "default")
 
 
 def test_replay_stops_on_first_fatal_without_retry(monkeypatch, tmp_path):
@@ -62,7 +96,8 @@ def test_replay_stops_on_first_fatal_without_retry(monkeypatch, tmp_path):
             workers.append(self)
 
         def metadata(self):
-            return plan["worker_metadata"]
+            return {**plan["worker_metadata"],
+                    "gpu_total_memory_bytes": 47673671680}
 
         def begin_episode(self, task, seed):
             assert task == audit.SOURCE_TASK and seed == plan["seed"]
@@ -97,6 +132,8 @@ def test_replay_stops_on_first_fatal_without_retry(monkeypatch, tmp_path):
     assert report["first_failure"]["request_id"] == 10
     assert report["first_failure"]["output_tokens"] is None
     assert report["first_failure"]["worker_request_id"] == 10
+    assert report["gpu_total_memory_bytes"] == {
+        "archived": 47676129280, "active": 47673671680}
     assert workers[0].generated == 10 and workers[0].closed
     assert json.loads((tmp_path / "replay" / "replay_result.json").read_text())["status"] == (
         "stopped_on_fatal_cuda")
