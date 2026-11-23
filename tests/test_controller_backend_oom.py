@@ -146,6 +146,49 @@ def test_worker_traceback_includes_request_and_phase(monkeypatch):
     assert error["request_id"] == 22 and error["failed_phase"] == "model_generate"
     assert error["traceback"].startswith("GPT-OSS request 22\n")
 
+
+def test_driver_error_traceback_survives_worker_protocol(monkeypatch, capsys):
+    class AcceleratorError(RuntimeError):
+        pass
+
+    class Model:
+        def __init__(self, _config):
+            self._generation_request_id = 0
+            self._last_failed_phase = None
+        def metadata(self):
+            return {}
+        def generate(self, _messages, max_new_tokens=None):
+            self._generation_request_id = 22
+            self._last_failed_phase = "model_generate"
+            raise AcceleratorError("CUDA driver error: an illegal memory access was encountered")
+
+    source = io.StringIO("\n".join([json.dumps({"op": "init", "config": {}}),
+                                     json.dumps({"op": "generate", "messages": []}), ""]))
+    sink = io.StringIO()
+    monkeypatch.setenv("AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS", "1")
+    serve(source=source, sink=sink, model_factory=Model)
+    response = [json.loads(line) for line in sink.getvalue().splitlines()][1]
+    assert "test_driver_error_traceback_survives_worker_protocol" in response["traceback"]
+    assert response["traceback"] in capsys.readouterr().err
+
+    worker = worker_response(monkeypatch, response)
+    with pytest.raises(controller_backend.ControllerWorkerFatalCUDA) as caught:
+        worker._request({"op": "generate", "messages": []})
+    assert caught.value.worker_traceback == response["traceback"]
+    assert caught.value.request_id == 22
+    assert caught.value.failed_phase == "model_generate"
+
+
+def test_nonfatal_worker_traceback_is_retained_for_replay(monkeypatch):
+    worker = worker_response(monkeypatch, {"ok": False, "error_type": "ValueError",
+                                          "error": "invalid input", "traceback": "original worker stack",
+                                          "request_id": 4, "failed_phase": "input_transfer"})
+    with pytest.raises(RuntimeError) as caught:
+        worker._request({"op": "generate", "messages": []})
+    assert caught.value.worker_traceback == "original worker stack"
+    assert caught.value.request_id == 4
+    assert caught.value.failed_phase == "input_transfer"
+
 @pytest.mark.parametrize("failure", ["closed", "exited", "closed_stream", "eof", "broken_pipe"])
 def test_definitive_worker_lifecycle_failures_are_typed(monkeypatch, failure):
     worker = worker_response(monkeypatch, {"ok": True})

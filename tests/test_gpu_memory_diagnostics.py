@@ -367,15 +367,16 @@ def test_gpt_oom_logs_error_and_next_request_start(monkeypatch, tmp_path):
     assert result["peak_gpu_memory_allocated_bytes"] == 300
 
 
+@pytest.mark.parametrize("prefix", ["CUDA error", "CUDA driver error"])
 def test_phase_trace_identifies_generate_failure_without_post_error_memory_query(
-        monkeypatch, tmp_path):
+        monkeypatch, tmp_path, prefix):
     class AcceleratorError(RuntimeError):
         pass
 
     torch_api = FakeTorch()
     telemetry = GpuMemoryDiagnostics(tmp_path, "gpt_oss_cuda_memory", torch_api)
     model = fake_gpt(torch_api, telemetry, lambda **_: (_ for _ in ()).throw(
-        AcceleratorError("CUDA error: an illegal memory access was encountered")))
+        AcceleratorError(f"{prefix}: an illegal memory access was encountered")))
     monkeypatch.setenv("AGENT_SUPPORT_GPTOSS_PHASE_TRACE", "1")
     with pytest.raises(AcceleratorError):
         model.generate([])

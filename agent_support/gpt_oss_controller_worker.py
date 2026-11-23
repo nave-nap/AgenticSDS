@@ -65,6 +65,11 @@ def serve(source=None, sink=None, model_factory=None) -> None:
             else:
                 raise ValueError(f"Unknown controller worker operation: {op}")
         except Exception as exc:
+            # Save the original worker stack before serializing the exception or
+            # touching diagnostic state. This path must not issue CUDA calls.
+            original_traceback = (traceback.format_exc()
+                                  if os.environ.get("AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS") == "1"
+                                  else None)
             response = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
             if op == "generate" and model is not None:
                 request_id = getattr(model, "_generation_request_id", None)
@@ -73,10 +78,11 @@ def serve(source=None, sink=None, model_factory=None) -> None:
                     response["request_id"] = request_id
                 if failed_phase is not None:
                     response["failed_phase"] = failed_phase
-            if os.environ.get("AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS") == "1":
+            if original_traceback is not None:
                 request_label = response.get("request_id")
                 response["traceback"] = (f"GPT-OSS request {request_label}\n"
-                                         if request_label is not None else "") + traceback.format_exc()
+                                         if request_label is not None else "") + original_traceback
+                print(response["traceback"], file=sys.stderr, flush=True)
         if release_after_generation and cache_release_enabled():
             # The generation frame and exception handler have both unwound here.
             try:

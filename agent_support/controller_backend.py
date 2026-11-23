@@ -68,7 +68,7 @@ def _fatal_cuda_response(error_type: str, detail: str) -> bool:
     if error_type not in {"AcceleratorError", "RuntimeError"}:
         return False
     return bool(re.search(
-        r"(?:^|\n)CUDA error: (?:an illegal memory access was encountered|"
+        r"(?:^|\n)CUDA (?:driver )?error: (?:an illegal memory access was encountered|"
         r"device-side assert triggered|an illegal instruction was encountered|"
         r"unspecified launch failure)(?:\b|$)", detail, re.IGNORECASE))
 
@@ -157,7 +157,11 @@ class GptOssControllerWorker:
                 raise ControllerWorkerFatalCUDA(
                     error_type, detail, result.get("traceback"),
                     result.get("request_id"), result.get("failed_phase"))
-            raise RuntimeError(f"GPT-OSS controller worker {result.get('error_type')}: {result.get('error')}")
+            error = RuntimeError(f"GPT-OSS controller worker {result.get('error_type')}: {result.get('error')}")
+            error.worker_traceback = result.get("traceback")
+            error.request_id = result.get("request_id")
+            error.failed_phase = result.get("failed_phase")
+            raise error
         return result
 
     def metadata(self) -> dict:

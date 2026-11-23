@@ -397,6 +397,11 @@ class GptOss20BModel:
             value = getattr(owner, "use_cache", None)
             if value is not None:
                 result[key] = value
+        generation_config = getattr(self.model, "generation_config", None)
+        if generation_config is not None:
+            result["generation_cache_implementation"] = getattr(
+                generation_config, "cache_implementation", None)
+            result["generation_max_cache_len"] = getattr(generation_config, "max_cache_len", None)
         return result
 
     def release_cuda_cache(self) -> None:
@@ -498,7 +503,9 @@ class GptOss20BModel:
         except Exception as exc:
             error_type = type(exc).__name__
             capture_memory = not (error_type in {"AcceleratorError", "RuntimeError"}
-                                  and "CUDA error:" in str(exc))
+                                  and re.search(r"CUDA (?:driver )?error: (?:an illegal memory access|"
+                                                r"device-side assert|an illegal instruction|"
+                                                r"unspecified launch failure)", str(exc), re.IGNORECASE))
             raise
         finally:
             if diagnostics is not None:
