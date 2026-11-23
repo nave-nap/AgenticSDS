@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .common import canonical_digest
-from .recovery_accuracy_policy import AccuracyFirstPolicy, RecoveryPolicy, StateAwarePolicy
+from .recovery_accuracy_policy import (AccuracyFirstPolicy, AccuracyFirstTerminalPolicy,
+                                       RecoveryPolicy, StateAwarePolicy)
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,21 @@ POLICY_REGISTRY: dict[str, PolicyEntry] = {
         "generated_candidates_on_stall": AccuracyFirstPolicy.generated_candidates_on_stall,
         "candidate_objectives": ["repair_prerequisite", "different_route_excluding_failed_action"],
         "alternative_craft_requires_fresh_sufficient_inventory": True}),
+    "accuracy_first_terminal_v1": PolicyEntry(AccuracyFirstTerminalPolicy, {
+        "policy_id": "accuracy_first_terminal_v1", "selector": "visible_failure_and_terminal_review_v1",
+        "failure_feedback_prefixes": list(AccuracyFirstTerminalPolicy.failure_feedback_prefixes),
+        "failure_reset_feedback_prefixes": list(AccuracyFirstTerminalPolicy.failure_reset_feedback_prefixes),
+        "failure_analysis_limit": AccuracyFirstTerminalPolicy.failure_analysis_limit,
+        "memory_scope": AccuracyFirstTerminalPolicy.memory_scope,
+        "memory_top_k": AccuracyFirstTerminalPolicy.memory_top_k,
+        "verify_craft": True, "inspect_candidates": True,
+        "generated_candidates_on_stall": AccuracyFirstTerminalPolicy.generated_candidates_on_stall,
+        "candidate_objectives": ["repair_prerequisite", "different_route_excluding_failed_action"],
+        "alternative_craft_requires_fresh_sufficient_inventory": True,
+        "terminal_review": "bounded_no_viable_strategy_review_v1",
+        "terminal_candidate_limit": AccuracyFirstTerminalPolicy.terminal_candidate_limit,
+        "terminal_state_limit": AccuracyFirstTerminalPolicy.terminal_state_limit,
+        "proactive_candidate_comparison": False}),
 }
 POLICIES = tuple(POLICY_REGISTRY)
 

@@ -7,18 +7,23 @@ import pytest
 
 from agent_support import recovery_policy_eval as evaluation
 from agent_support.common import read_json
-from agent_support.recovery_accuracy_policy import AccuracyFirstPolicy, StateAwarePolicy
+from agent_support.recovery_accuracy_policy import (AccuracyFirstPolicy,
+    AccuracyFirstTerminalPolicy, StateAwarePolicy)
 from agent_support.recovery_policy_registry import (POLICIES, make_policy,
                                                     policy_configuration, policy_digest)
 from agent_support.recovery_policy_telemetry import decision_telemetry
 
 
-def test_registry_routes_three_distinct_policies_and_preserves_frozen_config():
-    assert POLICIES == ("original_v4", "state_aware_v1", "accuracy_first_v1")
+def test_registry_routes_distinct_policies_and_preserves_frozen_config():
+    assert POLICIES == ("original_v4", "state_aware_v1", "accuracy_first_v1",
+                        "accuracy_first_terminal_v1")
     assert make_policy("original_v4") is None
     assert isinstance(make_policy("state_aware_v1"), StateAwarePolicy)
     assert isinstance(make_policy("accuracy_first_v1"), AccuracyFirstPolicy)
-    assert policy_digest("state_aware_v1") != policy_digest("accuracy_first_v1")
+    assert isinstance(make_policy("accuracy_first_terminal_v1"), AccuracyFirstTerminalPolicy)
+    assert policy_digest("accuracy_first_v1") == (
+        "14a19273a3afb2b04b589610014d7981a9fb355d2071dbef964b1150c7ad4733")
+    assert policy_digest("state_aware_v1") != policy_digest("accuracy_first_terminal_v1")
     assert policy_configuration("original_v4")["selector"] == "unmodified_v4_controller"
     for policy_id in POLICIES:
         pre = evaluation.preflight(policy_id)
@@ -42,7 +47,7 @@ def test_telemetry_separates_policy_intervention_from_parser_fallback():
              "recovery_state_before": {"last_progress": {"failed_action": True}},
              "controller_messages": [{"role": "user", "content": json.dumps({
                  "policy_guidance": {"stalled": True}})}],
-             "policy_intervention": {"policy_id": "accuracy_first_v1",
+             "policy_intervention": {"policy_id": "accuracy_first_terminal_v1",
                                      "request": {"operation": "inspect_candidate_v1"}},
              "request": {"operation": "inspect_candidate_v1",
                          "arguments": {"action": "get 1 log"}},
@@ -51,8 +56,8 @@ def test_telemetry_separates_policy_intervention_from_parser_fallback():
             {"parse_error": "bad JSON"}]},
         "outcome": {"success": False, "failed_action": False},
         "progress_evidence": {"observed_feedback": "Got 1 log"}}
-    telemetry = decision_telemetry(record, "accuracy_first_v1")
-    assert telemetry["policy_id"] == "accuracy_first_v1"
+    telemetry = decision_telemetry(record, "accuracy_first_terminal_v1")
+    assert telemetry["policy_id"] == "accuracy_first_terminal_v1"
     assert telemetry["failure_signals"]["last_progress"]["failed_action"] is True
     assert telemetry["failure_signals"]["policy_guidance"]["stalled"] is True
     assert telemetry["supports"][0]["selected_by_policy"] is True
@@ -133,24 +138,25 @@ def test_stage_and_batch_route_policies_and_lock_metadata(monkeypatch, tmp_path)
     assert calls.count("original_v4") == 4
     assert calls.count("state_aware_v1") == 4
     assert calls.count("accuracy_first_v1") == 4
+    assert calls.count("accuracy_first_terminal_v1") == 4
     monkeypatch.setattr(evaluation, "_plan", lambda require_runtime: plan)
     initialized = evaluation.initialize(tmp_path)
     assert initialized["implementation_commit"] == "test-commit"
-    first = evaluation.run_batch(tmp_path, "accuracy_first_v1", 0, 1, runner=fake_run)
-    second = evaluation.run_batch(tmp_path, "accuracy_first_v1", 0, 1, runner=fake_run)
+    first = evaluation.run_batch(tmp_path, "accuracy_first_terminal_v1", 0, 1, runner=fake_run)
+    second = evaluation.run_batch(tmp_path, "accuracy_first_terminal_v1", 0, 1, runner=fake_run)
     assert (first["completed"], second["completed"]) == (1, 2)
-    assert evaluation.status(tmp_path, "accuracy_first_v1", 0)["missing_indices"] == [2]
-    runs = sorted((tmp_path / "runs" / "accuracy_first_v1" / "batch_00").glob("textcraft_*"))
+    assert evaluation.status(tmp_path, "accuracy_first_terminal_v1", 0)["missing_indices"] == [2]
+    runs = sorted((tmp_path / "runs" / "accuracy_first_terminal_v1" / "batch_00").glob("textcraft_*"))
     first_run = next(path for path in runs if (path / "checkpoints" / "0000.json").exists())
     run_meta = read_json(first_run / "run.json")
     assert run_meta["implementation_commit"] == "test-commit"
-    assert run_meta["policy_sha256"] == policy_digest("accuracy_first_v1")
+    assert run_meta["policy_sha256"] == policy_digest("accuracy_first_terminal_v1")
     assert run_meta["model_settings"] == plan["model_settings"]
     assert run_meta["attention_implementation"] == "flex_attention"
-    assert read_json(first_run / "policy.json") == policy_configuration("accuracy_first_v1")
+    assert read_json(first_run / "policy.json") == policy_configuration("accuracy_first_terminal_v1")
     snapshot = read_json(first_run / "checkpoints" / "0000.json")
-    assert snapshot["decision_telemetry"][0]["policy_id"] == "accuracy_first_v1"
-    with pytest.raises(ValueError, match="Three policy runs do not|complete"):
+    assert snapshot["decision_telemetry"][0]["policy_id"] == "accuracy_first_terminal_v1"
+    with pytest.raises(ValueError, match="Policy runs do not|complete"):
         evaluation.compare(tmp_path)
 
 
@@ -161,24 +167,26 @@ def test_paired_comparison_scores_success_without_cost_penalty(monkeypatch, tmp_
     monkeypatch.setattr(evaluation, "checked_plan", lambda *_: plan)
     def completed(_root, policy_id, _plan):
         successes = {"original_v4": 10, "state_aware_v1": 12,
-                     "accuracy_first_v1": 14}[policy_id]
+                     "accuracy_first_v1": 12,
+                     "accuracy_first_terminal_v1": 14}[policy_id]
         return {task["task_id"]: {
             "task_id": task["task_id"], "success": index < successes,
             "status": "success" if index < successes else "max_actions",
             "failed_actions": 1, "environment_actions": 2,
-            "model_decisions": 2, "support_calls": 100 if policy_id == "accuracy_first_v1" else 1,
-            "input_tokens": 100000 if policy_id == "accuracy_first_v1" else 10,
-            "output_tokens": 100000 if policy_id == "accuracy_first_v1" else 10,
-            "inference_seconds": 1000 if policy_id == "accuracy_first_v1" else 1,
+            "model_decisions": 2, "support_calls": 100 if policy_id == "accuracy_first_terminal_v1" else 1,
+            "input_tokens": 100000 if policy_id == "accuracy_first_terminal_v1" else 10,
+            "output_tokens": 100000 if policy_id == "accuracy_first_terminal_v1" else 10,
+            "inference_seconds": 1000 if policy_id == "accuracy_first_terminal_v1" else 1,
             "infrastructure_invalid": False, "decision_telemetry": []}
             for index, task in enumerate(tasks)}
     monkeypatch.setattr(evaluation, "completed", completed)
     report = evaluation.compare(tmp_path)
     assert report["exploratory_development_gate_met"] is True
-    assert report["policy_reports"]["accuracy_first_v1"]["success_rate"] == 14 / 30
-    assert report["paired"]["accuracy_first_v1_minus_original_v4"]["paired_wins"] == 4
-    assert report["paired"]["accuracy_first_v1_minus_state_aware_v1"]["paired_wins"] == 2
-    assert report["policy_reports"]["accuracy_first_v1"]["totals"]["input_tokens"] > 0
+    assert report["policy_reports"]["accuracy_first_terminal_v1"]["success_rate"] == 14 / 30
+    assert report["paired"]["accuracy_first_terminal_v1_minus_original_v4"]["paired_wins"] == 4
+    assert report["paired"]["accuracy_first_terminal_v1_minus_state_aware_v1"]["paired_wins"] == 2
+    assert report["paired"]["accuracy_first_terminal_v1_minus_accuracy_first_v1"]["paired_wins"] == 2
+    assert report["policy_reports"]["accuracy_first_terminal_v1"]["totals"]["input_tokens"] > 0
 
 
 def test_fatal_cuda_episode_stops_batch_and_blocks_resume(monkeypatch, tmp_path):
@@ -194,8 +202,8 @@ def test_fatal_cuda_episode_stops_batch_and_blocks_resume(monkeypatch, tmp_path)
         result["trace"][-1]["action"] = None
         return result
 
-    directory = tmp_path / "runs" / "accuracy_first_v1" / "batch_00"
-    run_dir = evaluation._run_tasks(directory, "accuracy_first_v1", [0, 1, 2], plan,
+    directory = tmp_path / "runs" / "accuracy_first_terminal_v1" / "batch_00"
+    run_dir = evaluation._run_tasks(directory, "accuracy_first_terminal_v1", [0, 1, 2], plan,
         qwen_factory=lambda _config: object(), gpt_factory=FakeWorker,
         memory_factory=lambda *_: None, episode_runner=fatal_episode)
     assert len(executed) == 1
@@ -204,7 +212,7 @@ def test_fatal_cuda_episode_stops_batch_and_blocks_resume(monkeypatch, tmp_path)
     assert episode["infrastructure_invalid"] is True
     monkeypatch.setattr(evaluation, "checked_plan", lambda *_: plan)
     with pytest.raises(ValueError, match="Prior stopped_worker_failure"):
-        evaluation.run_batch(tmp_path, "accuracy_first_v1", 0)
+        evaluation.run_batch(tmp_path, "accuracy_first_terminal_v1", 0)
 
 
 def test_cuda_illegal_access_invalidates_stage_for_all_policies(monkeypatch, tmp_path):

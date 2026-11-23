@@ -8,7 +8,7 @@ set -euo pipefail
 umask 077
 repo_root="${SLURM_SUBMIT_DIR:?Submit from the policy evaluation worktree}"
 : "${RECOVERY_ROOT:?Set initialized policy output root}"
-: "${RECOVERY_POLICY:?Set original_v4, state_aware_v1, or accuracy_first_v1}"
+: "${RECOVERY_POLICY:?Set original_v4, state_aware_v1, accuracy_first_v1, or accuracy_first_terminal_v1}"
 : "${RECOVERY_BATCH:?Set batch 0 through 9}"
 : "${AGENT_SUPPORT_GPTOSS_PYTHON:?Set pinned GPT-OSS Python}"
 : "${AGENT_SUPPORT_GPTOSS_HF_HOME:?Set pinned GPT-OSS cache}"

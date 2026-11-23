@@ -17,7 +17,7 @@ from .benchmarks import make_episode
 from .controller_backend import (ControllerWorkerFatalCUDA, ControllerWorkerOOM,
                                  ControllerWorkerUnavailable)
 from .policy import parse_textcraft, textcraft_messages
-from .recovery_accuracy_policy import PolicyDirective, RecoveryPolicy
+from .recovery_accuracy_policy import PolicyDirective, RecoveryPolicy, TerminalReview
 
 ARMS = ("expanded_v3_v1", "autonomous_recovery_v4")
 WORKER_FAILURE_REASONS = {"cuda_oom": "controller_cuda_oom",
@@ -322,6 +322,7 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
     trace = SupportTrace(context.original_action, context.original_action)
     current = replace(context, capabilities=capability_catalog(executor))
     pending = None
+    terminal_claim_reason = None
     operations_this_decision = 0
     for depth in range(budget.max_depth):
         if time.perf_counter() >= deadline:
@@ -417,11 +418,50 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
             trace.events.append(event)
             trace.termination_reason = "controller_parse_error"
             return trace, "controller_parse_error"
-        if policy is not None and choice["kind"] == "execute":
-            candidate_context = replace(current, current_action=(
-                choice["action"] if choice["action"] is not None else current.current_action))
+        terminal_directive = None
+        rescued_stop = False
+        review_stop = getattr(policy, "review_terminal", None)
+        if (choice["kind"] == "stop" and choice["stop_reason"] == "no_viable_strategy"
+                and callable(review_stop)):
             try:
-                directive = policy.select(candidate_context, state, set(executor.operations))
+                if terminal_claim_reason is None:
+                    terminal_claim_reason = choice["reason"]
+                review = review_stop(current, state, set(executor.operations), terminal_claim_reason)
+                if (not isinstance(review, TerminalReview) or
+                        (review.directive is not None and review.action is not None)):
+                    raise ValueError("Policy returned an invalid terminal review")
+                event["terminal_review"] = {"policy_id": policy.policy_id,
+                    "claim": "no_viable_strategy", "reason": review.reason,
+                    "evidence": copy.deepcopy(review.evidence),
+                    "outcome": ("request" if review.directive is not None else
+                                "rescue" if review.action is not None else "accept")}
+                if review.action is not None:
+                    candidate = parse_decision(json.dumps({"kind": "execute",
+                        "action": review.action, "reason": review.reason,
+                        "state_update": {},
+                        "progress_assessment": choice["progress_assessment"],
+                        "progress_evidence": choice["progress_evidence"],
+                        "support_assessment": choice["support_assessment"]}),
+                        set(executor.operations))
+                    event["policy_action_selection"] = {"policy_id": policy.policy_id,
+                        "from": None, "to": review.action, "source": "terminal_review"}
+                    choice = candidate
+                    rescued_stop = True
+                else:
+                    terminal_directive = review.directive
+            except Exception as exc:
+                event["error"] = repr(exc)
+                trace.events.append(event)
+                trace.termination_reason = "policy_error"
+                return trace, "policy_error"
+        if policy is not None and ((choice["kind"] == "execute" and not rescued_stop) or
+                                   terminal_directive is not None):
+            candidate_context = replace(current, current_action=(
+                choice["action"] if choice["kind"] == "execute" and choice["action"] is not None
+                else current.current_action))
+            try:
+                directive = (terminal_directive if terminal_directive is not None else
+                             policy.select(candidate_context, state, set(executor.operations)))
                 if directive is not None and not isinstance(directive, PolicyDirective):
                     raise ValueError("Policy returned an invalid directive")
             except Exception as exc:
@@ -443,7 +483,8 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
                         "arguments": directive.request.arguments,
                         "uncertainty": directive.request.objective,
                         "expected_information": directive.expected_information,
-                        "state_update": choice["state_update"],
+                        "state_update": ({} if terminal_directive is not None else
+                                         choice["state_update"]),
                         "progress_assessment": choice["progress_assessment"],
                         "progress_evidence": choice["progress_evidence"],
                         "support_assessment": choice["support_assessment"]}),
@@ -454,6 +495,8 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
                     trace.termination_reason = "policy_error"
                     return trace, "policy_error"
                 current = candidate_context
+            elif terminal_directive is not None:
+                event["terminal_review"]["outcome"] = "accept_at_support_limit"
         kind = choice["kind"]
         if kind == "request":
             request = SupportRequest(choice["operation"], choice["arguments"], choice["uncertainty"])

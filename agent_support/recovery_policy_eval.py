@@ -1,4 +1,4 @@
-"""Isolated, matched three-policy TextCraft recovery evaluation CLI."""
+"""Isolated, matched four-policy TextCraft recovery evaluation CLI."""
 from __future__ import annotations
 
 import argparse
@@ -26,7 +26,7 @@ from .recovery_v4_eval import (MANIFEST_SHA256, RECIPE_SHA256, config_for,
                                preflight as v4_preflight)
 from .runner import package_versions
 
-PROTOCOL = "textcraft_recovery_policy30_flex_runtime_v1"
+PROTOCOL = "textcraft_recovery_policy30_terminal_review_v1"
 BASE_ARM = "autonomous_recovery_v4"
 REQUESTED_ATTENTION = "flex_attention"
 TRACEBACK_ENV = "AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS"
@@ -488,16 +488,19 @@ def aggregate(root: str | Path, policy_id: str) -> dict:
 def compare(root: str | Path) -> dict:
     reports = {policy: aggregate(root, policy) for policy in POLICIES}
     if any(not item["primary_score_ready"] for item in reports.values()):
-        raise ValueError("All three policies need complete infrastructure-valid runs")
+        raise ValueError("All policies need complete infrastructure-valid runs")
     if len({item["plan_sha256"] for item in reports.values()}) != 1:
-        raise ValueError("Three policy runs do not share one locked plan")
+        raise ValueError("Policy runs do not share one locked plan")
     rows = {policy: {row["task_id"]: row for row in report["tasks"]}
             for policy, report in reports.items()}
     task_ids = [task["task_id"] for task in manifest()["tasks"]]
     comparisons = {}
     for left, right in (("state_aware_v1", "original_v4"),
                         ("accuracy_first_v1", "original_v4"),
-                        ("accuracy_first_v1", "state_aware_v1")):
+                        ("accuracy_first_v1", "state_aware_v1"),
+                        ("accuracy_first_terminal_v1", "original_v4"),
+                        ("accuracy_first_terminal_v1", "state_aware_v1"),
+                        ("accuracy_first_terminal_v1", "accuracy_first_v1")):
         differences = [int(rows[left][task]["success"]) - int(rows[right][task]["success"])
                        for task in task_ids]
         comparisons[f"{left}_minus_{right}"] = {
@@ -506,8 +509,9 @@ def compare(root: str | Path) -> dict:
             "paired_bootstrap_95": paired_interval(differences)}
     development_gate_met = all(
         comparisons[key]["paired_wins"] - comparisons[key]["paired_losses"] >= 2
-        for key in ("accuracy_first_v1_minus_original_v4",
-                    "accuracy_first_v1_minus_state_aware_v1"))
+        for key in ("accuracy_first_terminal_v1_minus_original_v4",
+                    "accuracy_first_terminal_v1_minus_state_aware_v1",
+                    "accuracy_first_terminal_v1_minus_accuracy_first_v1"))
     return {"protocol": PROTOCOL, "plan_sha256": next(iter(reports.values()))["plan_sha256"],
         "primary_metric": "environment_verified_success_rate",
         "exploratory_development_gate_met": development_gate_met,

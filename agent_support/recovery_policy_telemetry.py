@@ -31,6 +31,7 @@ def decision_telemetry(record: dict, policy_id: str) -> dict:
         candidates.append({"source": "qwen", "action": record["proposed_action"]})
     evaluations = []
     interventions = []
+    terminal_reviews = []
     controller_errors = []
     progress_judgments = []
     worker_failures = []
@@ -44,6 +45,12 @@ def decision_telemetry(record: dict, policy_id: str) -> dict:
         if event.get("policy_action_selection"):
             interventions.append({"policy_action_selection":
                                   copy.deepcopy(event["policy_action_selection"])})
+            selection = event["policy_action_selection"]
+            if selection.get("source") == "terminal_review" and selection.get("to"):
+                candidates.append({"source": "terminal_review", "depth": depth,
+                                   "action": selection["to"]})
+        if event.get("terminal_review"):
+            terminal_reviews.append(copy.deepcopy(event["terminal_review"]))
         if event.get("progress_assessment"):
             progress_judgments.append(copy.deepcopy(event["progress_assessment"]))
         if ((event.get("error") and not event.get("request")) or
@@ -100,6 +107,7 @@ def decision_telemetry(record: dict, policy_id: str) -> dict:
         "supports": supports, "candidate_actions": candidates,
         "candidate_evaluations": evaluations,
         "policy_interventions": interventions,
+        "terminal_reviews": terminal_reviews,
         "final_selected_action": record.get("action"),
         "environment_outcome": copy.deepcopy(record.get("outcome")),
         "progress_evidence": copy.deepcopy(record.get("progress_evidence")),

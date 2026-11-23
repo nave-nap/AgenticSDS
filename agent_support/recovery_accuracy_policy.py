@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from .autonomous_support import SupportContext, SupportRequest
+from .autonomous_support import SupportContext, SupportRequest, visible_state_digest
 from .policy import parse_textcraft
 
 
@@ -17,6 +17,16 @@ class PolicyDirective:
     request: SupportRequest
     expected_information: str
     reason: str
+
+
+@dataclass(frozen=True)
+class TerminalReview:
+    """One bounded step in checking a controller's impossibility claim."""
+
+    reason: str
+    evidence: dict
+    directive: PolicyDirective | None = None
+    action: str | None = None
 
 
 class RecoveryPolicy(Protocol):
@@ -184,3 +194,125 @@ class StateAwarePolicy(AccuracyFirstPolicy):
 
     policy_id = "state_aware_v1"
     generated_candidates_on_stall = 0
+
+
+class AccuracyFirstTerminalPolicy(AccuracyFirstPolicy):
+    """Check ordinary impossibility claims before ending the episode."""
+
+    policy_id = "accuracy_first_terminal_v1"
+    terminal_candidate_limit = 2
+    terminal_state_limit = 20
+
+    def __init__(self):
+        # An action is investigated only for the visible state that produced it.
+        self._investigated: dict[str, set[str]] = {}
+
+    def review_terminal(self, context: SupportContext, state,
+                        available: set[str], claim_reason: str) -> TerminalReview:
+        used = [(item["operation"], item["arguments"])
+                for item in context.support_history if item["decision"] == context.decision]
+        records = list(zip((item for item in context.support_history
+                            if item["decision"] == context.decision), context.results))
+        digest = visible_state_digest(context)
+        investigated = self._investigated.setdefault(f"{context.task_id}:{digest}", set())
+        candidate_results = [result for entry, result in records
+                             if entry["operation"] == "reason_over_artifacts_v1"
+                             and entry["arguments"].get("output_type") == "candidate_action"]
+        candidates = list(dict.fromkeys(result.proposed_action for result in candidate_results
+            if result.status == "ok" and result.proposed_action and
+            parse_textcraft(result.proposed_action) == result.proposed_action))
+        inspected = {result.information.get("parsed_action"): result.information
+                     for entry, result in records if entry["operation"] == "inspect_candidate_v1"
+                     and result.status == "ok" and isinstance(result.information, dict)}
+        prerequisites = {result.information.get("displayed_recipe"): result.information
+                         for entry, result in records if entry["operation"] == "verify_prerequisites_v1"
+                         and result.status == "ok" and isinstance(result.information, dict)}
+        inventory_seen = any(action == "inventory" for action, _ in context.history)
+        failed = {action for action, feedback in self._active_history(context)
+                  if self._failed(feedback)}
+        evidence = {"claim_reason": claim_reason, "visible_state_sha256": digest,
+                    "inventory_observed": inventory_seen,
+                    "attempted_approaches": list(state.attempted_approaches),
+                    "failed_actions": sorted(failed), "candidate_actions": candidates,
+                    "investigated_actions": sorted(investigated),
+                    "support_operations": [operation for operation, _ in used]}
+        if not inventory_seen and not context.history:
+            evidence["claim_analysis"] = "No inventory observation or environment attempt supports impossibility"
+        elif not failed and not state.attempted_approaches:
+            evidence["claim_analysis"] = "No failed approach supports impossibility"
+        else:
+            evidence["claim_analysis"] = "Compare observed failures with distinct alternatives"
+
+        def request(operation: str, arguments: dict, reason: str) -> TerminalReview | None:
+            if operation not in available or (operation, arguments) in used:
+                return None
+            directive = PolicyDirective(SupportRequest(operation, arguments, reason), reason, reason)
+            return TerminalReview(reason, evidence, directive=directive)
+
+        selected = request("inspect_state_v1", {"scope": "all", "limit": self.terminal_state_limit},
+                           "Inspect visible goal, recipes, and inventory evidence for the stop claim")
+        if selected:
+            return selected
+        query = (f"Goal: {state.objective}; controller proposed no viable strategy because: "
+                 f"{claim_reason}; observation: {context.observation[:300]}")[:1000]
+        selected = request("retrieve_episodic_memory_v1",
+                           {"query": query, "scope": self.memory_scope, "top_k": self.memory_top_k},
+                           "Find prior successful approaches relevant to the stop claim")
+        if selected:
+            return selected
+        if len(candidate_results) < self.terminal_candidate_limit:
+            previous = candidates[0] if candidates else "none"
+            objective = ("Challenge the proposed no_viable_strategy stop. "
+                         f"Alternative {len(candidate_results) + 1}. "
+                         f"Goal: {state.objective[:120]}. Claim: {claim_reason[:160]}. "
+                         f"Suggest one valid next action using visible evidence. "
+                         f"Differ from prior candidate: {previous[:100]}. "
+                         "Prefer inventory if it has never been observed. "
+                         "Avoid previously failed actions without new evidence.")[:512]
+            selected = request("reason_over_artifacts_v1",
+                               {"objective": objective, "output_type": "candidate_action"},
+                               "Generate a distinct alternative to the terminal claim")
+            if selected:
+                return selected
+
+        for candidate in candidates:
+            if candidate not in inspected and candidate not in investigated:
+                selected = request("inspect_candidate_v1", {"action": candidate},
+                                   "Check alternative action format and visible admissibility")
+                if selected:
+                    return selected
+        for candidate in candidates:
+            if candidate.startswith("craft ") and candidate in inspected and candidate not in prerequisites:
+                selected = request("verify_prerequisites_v1", {"action": candidate},
+                                   "Check displayed craft and observed ingredient sufficiency")
+                if selected:
+                    return selected
+
+        for candidate in candidates:
+            checked = inspected.get(candidate, {})
+            if candidate in investigated or candidate in failed or not checked.get("admissible"):
+                continue
+            if any(action == candidate and self._failed(feedback) for action, feedback in context.history):
+                continue
+            if candidate.startswith("craft ") and (checked.get("displayed_recipe") is not True or
+                    prerequisites.get(candidate, {}).get(
+                        "all_prerequisites_observed_sufficient") is not True):
+                continue
+            if candidate == "inventory" and inventory_seen:
+                continue
+            investigated.update(candidates)
+            return TerminalReview("A checked alternative remains available", evidence, action=candidate)
+
+        if not inventory_seen and "inventory" not in investigated:
+            if "inventory" not in inspected:
+                selected = request("inspect_candidate_v1", {"action": "inventory"},
+                                   "Check inventory as an evidence-gathering action")
+                if selected:
+                    return selected
+            if inspected.get("inventory", {}).get("admissible"):
+                investigated.update(candidates)
+                investigated.add("inventory")
+                return TerminalReview("Inventory has not been observed", evidence, action="inventory")
+
+        investigated.update(candidates)
+        return TerminalReview("No supported alternative remained after bounded review", evidence)
