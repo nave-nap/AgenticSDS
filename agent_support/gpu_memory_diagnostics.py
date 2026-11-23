@@ -81,9 +81,11 @@ class GpuMemoryDiagnostics:
         return before
 
     def finish(self, request_id: int, input_tokens: int | None,
-               max_output_tokens: int, error_type: str | None) -> None:
+               max_output_tokens: int, error_type: str | None,
+               *, capture_memory: bool = True) -> None:
         self.write(event="generation_end", request_id=request_id,
                    input_tokens=input_tokens, max_output_tokens=max_output_tokens,
                    status="error" if error_type else "ok", error_type=error_type,
-                   memory=self.snapshot())
+                   memory=self.snapshot() if capture_memory else
+                          {"skipped_after_generation_error": True})
         self.previous_request_id = request_id

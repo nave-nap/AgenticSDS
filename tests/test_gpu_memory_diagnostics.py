@@ -367,6 +367,31 @@ def test_gpt_oom_logs_error_and_next_request_start(monkeypatch, tmp_path):
     assert result["peak_gpu_memory_allocated_bytes"] == 300
 
 
+def test_phase_trace_identifies_generate_failure_without_post_error_memory_query(
+        monkeypatch, tmp_path):
+    class AcceleratorError(RuntimeError):
+        pass
+
+    torch_api = FakeTorch()
+    telemetry = GpuMemoryDiagnostics(tmp_path, "gpt_oss_cuda_memory", torch_api)
+    model = fake_gpt(torch_api, telemetry, lambda **_: (_ for _ in ()).throw(
+        AcceleratorError("CUDA error: an illegal memory access was encountered")))
+    monkeypatch.setenv("AGENT_SUPPORT_GPTOSS_PHASE_TRACE", "1")
+    with pytest.raises(AcceleratorError):
+        model.generate([])
+    records = events(tmp_path)
+    phases = [(item["phase"], item["status"]) for item in records
+              if item["event"] == "generation_phase"]
+    assert phases == [("input_transfer", "start"), ("input_transfer", "ok"),
+                      ("pre_generation_synchronize", "start"),
+                      ("pre_generation_synchronize", "ok"),
+                      ("model_generate", "start"), ("model_generate", "error")]
+    assert model._last_failed_phase == "model_generate"
+    assert model._generation_request_id == 1
+    assert torch_api.cuda.syncs == 2
+    assert records[-1]["memory"] == {"skipped_after_generation_error": True}
+
+
 def test_qwen_placement_and_generation_telemetry(monkeypatch, tmp_path):
     monkeypatch.setenv(ENABLE_ENV, "1")
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")

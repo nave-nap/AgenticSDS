@@ -121,6 +121,31 @@ def test_opt_in_worker_traceback_preserves_original_error(monkeypatch):
     assert error["error"] == "CUDA error: an illegal memory access was encountered"
     assert "test_opt_in_worker_traceback_preserves_original_error" in error["traceback"]
 
+
+def test_worker_traceback_includes_request_and_phase(monkeypatch):
+    class AcceleratorError(RuntimeError):
+        pass
+
+    class Model:
+        def __init__(self, _config):
+            self._generation_request_id = 0
+            self._last_failed_phase = None
+        def metadata(self):
+            return {}
+        def generate(self, _messages, max_new_tokens=None):
+            self._generation_request_id = 22
+            self._last_failed_phase = "model_generate"
+            raise AcceleratorError("CUDA error: an illegal memory access was encountered")
+
+    source = io.StringIO("\n".join([json.dumps({"op": "init", "config": {}}),
+                                     json.dumps({"op": "generate", "messages": []}), ""]))
+    sink = io.StringIO()
+    monkeypatch.setenv("AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS", "1")
+    serve(source=source, sink=sink, model_factory=Model)
+    error = [json.loads(line) for line in sink.getvalue().splitlines()][1]
+    assert error["request_id"] == 22 and error["failed_phase"] == "model_generate"
+    assert error["traceback"].startswith("GPT-OSS request 22\n")
+
 @pytest.mark.parametrize("failure", ["closed", "exited", "closed_stream", "eof", "broken_pipe"])
 def test_definitive_worker_lifecycle_failures_are_typed(monkeypatch, failure):
     worker = worker_response(monkeypatch, {"ok": True})

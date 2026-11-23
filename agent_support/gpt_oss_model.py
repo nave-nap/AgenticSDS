@@ -339,6 +339,8 @@ class GptOss20BModel:
         self.memory_diagnostics = (GpuMemoryDiagnostics(directory, "gpt_oss_cuda_memory", torch)
                                    if directory else None)
         self._diagnostic_request_id = 0
+        self._generation_request_id = 0
+        self._last_failed_phase = None
 
     def metadata(self) -> dict:
         return {"model_type": "gpt_oss_20b", "model_id": self.model_id,
@@ -381,9 +383,21 @@ class GptOss20BModel:
 
     def probe_input(self, messages: list[dict]) -> dict:
         """Fingerprint the exact token sequence for an explicit probe request."""
-        ids = single_input_token_ids(self._encode_messages(messages, tensors=True))
-        return {"input_tokens": len(ids), "input_ids_sha256": input_ids_sha256(ids),
-            "attention_implementation": self.model.config._attn_implementation}
+        encoded = self._encode_messages(messages, tensors=True)
+        ids = single_input_token_ids(encoded)
+        result = {"input_tokens": len(ids), "input_ids_sha256": input_ids_sha256(ids),
+                  "attention_implementation": self.model.config._attn_implementation}
+        if "attention_mask" in encoded:
+            mask = single_input_token_ids(encoded["attention_mask"])
+            result.update(attention_mask_sha256=input_ids_sha256(mask),
+                          attention_mask_tokens=len(mask),
+                          attention_mask_nonzero=sum(mask))
+        for key, owner in (("model_use_cache", self.model.config),
+                           ("generation_use_cache", getattr(self.model, "generation_config", None))):
+            value = getattr(owner, "use_cache", None)
+            if value is not None:
+                result[key] = value
+        return result
 
     def release_cuda_cache(self) -> None:
         """Release unused allocator blocks after a completed worker request."""
@@ -403,10 +417,36 @@ class GptOss20BModel:
     def generate(self, messages: list[dict], max_new_tokens: int | None = None) -> dict:
         limit = self.max_new_tokens if max_new_tokens is None else max_new_tokens
         diagnostics = self.memory_diagnostics
-        request_id = None
+        self._generation_request_id = getattr(self, "_generation_request_id", 0) + 1
+        request_id = self._generation_request_id
+        self._last_failed_phase = None
+        phase_trace = os.environ.get("AGENT_SUPPORT_GPTOSS_PHASE_TRACE") == "1"
+
+        def phase(name, action):
+            if not phase_trace:
+                return action()
+            if diagnostics is not None:
+                diagnostics.write(event="generation_phase", request_id=request_id,
+                                  phase=name, status="start")
+            phase_started = time.perf_counter()
+            try:
+                result = action()
+            except Exception as exc:
+                self._last_failed_phase = name
+                if diagnostics is not None:
+                    diagnostics.write(event="generation_phase", request_id=request_id,
+                                      phase=name, status="error",
+                                      error_type=type(exc).__name__, error_detail=str(exc),
+                                      elapsed_seconds=round(time.perf_counter() - phase_started, 3))
+                raise
+            if diagnostics is not None:
+                diagnostics.write(event="generation_phase", request_id=request_id,
+                                  phase=name, status="ok",
+                                  elapsed_seconds=round(time.perf_counter() - phase_started, 3))
+            return result
+
         if diagnostics is not None:
-            self._diagnostic_request_id += 1
-            request_id = self._diagnostic_request_id
+            self._diagnostic_request_id = request_id
             before = diagnostics.start(request_id, limit)
             # Keep the historical since-load high-water fields despite per-request resets.
             self.peak_gpu_memory_bytes = max(self.peak_gpu_memory_bytes,
@@ -415,19 +455,29 @@ class GptOss20BModel:
                                                before.get("peak_reserved_bytes", 0))
         input_count = None
         error_type = None
+        capture_memory = True
         try:
-            inputs = self._encode_messages(messages, tensors=True).to(self.model.device)
+            def transfer():
+                encoded = self._encode_messages(messages, tensors=True).to(self.model.device)
+                if phase_trace:
+                    self.torch.cuda.synchronize(0)
+                return encoded
+
+            inputs = phase("input_transfer", transfer)
             input_ids = inputs["input_ids"]
             input_count = int(input_ids.shape[1])
-            self.torch.cuda.synchronize(0)
+            phase("pre_generation_synchronize", lambda: self.torch.cuda.synchronize(0))
             started = time.perf_counter()
-            with self.torch.inference_mode():
-                output = self.model.generate(
-                    **inputs, do_sample=True, temperature=self.temperature,
-                    top_p=self.top_p, top_k=self.top_k, max_new_tokens=limit,
-                    eos_token_id=self.return_token_id,
-                    pad_token_id=self.tokenizer.pad_token_id)
-            self.torch.cuda.synchronize(0)
+            def generate_model():
+                with self.torch.inference_mode():
+                    return self.model.generate(
+                        **inputs, do_sample=True, temperature=self.temperature,
+                        top_p=self.top_p, top_k=self.top_k, max_new_tokens=limit,
+                        eos_token_id=self.return_token_id,
+                        pad_token_id=self.tokenizer.pad_token_id)
+
+            output = phase("model_generate", generate_model)
+            phase("post_generation_synchronize", lambda: self.torch.cuda.synchronize(0))
             elapsed = round(time.perf_counter() - started, 3)
             generated_ids = output[0][input_ids.shape[1]:].tolist()
             parsed = parse_configured_completion(self.tokenizer, generated_ids, limit,
@@ -447,7 +497,10 @@ class GptOss20BModel:
                     "peak_gpu_memory_reserved_bytes": self.peak_gpu_reserved_bytes}
         except Exception as exc:
             error_type = type(exc).__name__
+            capture_memory = not (error_type in {"AcceleratorError", "RuntimeError"}
+                                  and "CUDA error:" in str(exc))
             raise
         finally:
             if diagnostics is not None:
-                diagnostics.finish(request_id, input_count, limit, error_type)
+                diagnostics.finish(request_id, input_count, limit, error_type,
+                                   capture_memory=capture_memory)

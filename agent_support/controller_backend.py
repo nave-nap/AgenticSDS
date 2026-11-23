@@ -29,10 +29,13 @@ class ControllerWorkerFatalCUDA(RuntimeError):
     failure_kind = "cuda_fatal"
     termination_reason = "controller_cuda_fatal"
 
-    def __init__(self, error_type: str, detail: str, worker_traceback: str | None = None):
+    def __init__(self, error_type: str, detail: str, worker_traceback: str | None = None,
+                 request_id: int | None = None, failed_phase: str | None = None):
         self.error_type = error_type
         self.detail = detail
         self.worker_traceback = worker_traceback
+        self.request_id = request_id
+        self.failed_phase = failed_phase
         super().__init__(f"GPT-OSS controller worker {error_type}: {detail}")
 
 
@@ -52,6 +55,10 @@ def worker_failure_marker(exc: ControllerWorkerOOM | ControllerWorkerFatalCUDA |
     marker = {"kind": exc.failure_kind, "detail": exc.detail}
     if isinstance(exc, ControllerWorkerFatalCUDA):
         marker["error_type"] = exc.error_type
+        if exc.request_id is not None:
+            marker["request_id"] = exc.request_id
+        if exc.failed_phase:
+            marker["failed_phase"] = exc.failed_phase
         if exc.worker_traceback:
             marker["worker_traceback"] = exc.worker_traceback
     return marker
@@ -147,7 +154,9 @@ class GptOssControllerWorker:
             error_type, detail = result.get("error_type"), result.get("error")
             if isinstance(error_type, str) and isinstance(detail, str) and _fatal_cuda_response(error_type, detail):
                 self.unusable = True
-                raise ControllerWorkerFatalCUDA(error_type, detail, result.get("traceback"))
+                raise ControllerWorkerFatalCUDA(
+                    error_type, detail, result.get("traceback"),
+                    result.get("request_id"), result.get("failed_phase"))
             raise RuntimeError(f"GPT-OSS controller worker {result.get('error_type')}: {result.get('error')}")
         return result
 
