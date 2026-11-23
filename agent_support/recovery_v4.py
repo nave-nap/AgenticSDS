@@ -16,6 +16,7 @@ from .autonomous_support import (ControllerResponse, SupportBudget, SupportConte
 from .benchmarks import make_episode
 from .controller_backend import ControllerWorkerOOM, ControllerWorkerUnavailable
 from .policy import parse_textcraft, textcraft_messages
+from .recovery_accuracy_policy import PolicyDirective, RecoveryPolicy
 
 ARMS = ("expanded_v3_v1", "autonomous_recovery_v4")
 WORKER_FAILURE_REASONS = {"cuda_oom": "controller_cuda_oom",
@@ -294,7 +295,8 @@ def capability_catalog(executor: SupportExecutor) -> tuple[dict, ...]:
     return tuple(items)
 
 
-def _messages(context: SupportContext, state: RecoveryState, pending: dict | None) -> list[dict]:
+def _messages(context: SupportContext, state: RecoveryState, pending: dict | None,
+              policy: RecoveryPolicy | None = None) -> list[dict]:
     visible = context.as_dict()
     visible.pop("task_id", None)
     visible["history"] = visible["history"][-8:]
@@ -305,13 +307,16 @@ def _messages(context: SupportContext, state: RecoveryState, pending: dict | Non
     visible["support_history"] = visible["support_history"][-8:]
     visible["recovery_state"] = state.snapshot()
     visible["pending_support_assessment"] = pending
+    if policy is not None:
+        visible["policy_guidance"] = policy.guidance(context, state)
     return [{"role": "system", "content": SYSTEM},
             {"role": "user", "content": json.dumps(visible, ensure_ascii=False, separators=(",", ":"))}]
 
 
 def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
                   context: SupportContext, state: RecoveryState, *, deadline: float,
-                  inference_limit: float, inference_used: float) -> tuple[SupportTrace, str | None]:
+                  inference_limit: float, inference_used: float,
+                  policy: RecoveryPolicy | None = None) -> tuple[SupportTrace, str | None]:
     trace = SupportTrace(context.original_action, context.original_action)
     current = replace(context, capabilities=capability_catalog(executor))
     pending = None
@@ -324,7 +329,7 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
             trace.termination_reason = "inference_time_budget"
             return trace, "inference_time_budget"
         current = replace(current, remaining_budget=budget.remaining(operations_this_decision, depth))
-        messages = _messages(current, state, pending)
+        messages = _messages(current, state, pending, policy)
         try:
             input_count = model.count_messages_tokens(messages)
             output_limit = min(model.max_new_tokens,
@@ -402,6 +407,43 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
             trace.events.append(event)
             trace.termination_reason = "controller_parse_error"
             return trace, "controller_parse_error"
+        if policy is not None and choice["kind"] == "execute":
+            candidate_context = replace(current, current_action=(
+                choice["action"] if choice["action"] is not None else current.current_action))
+            try:
+                directive = policy.select(candidate_context, state, set(executor.operations))
+                if directive is not None and not isinstance(directive, PolicyDirective):
+                    raise ValueError("Policy returned an invalid directive")
+            except Exception as exc:
+                event["error"] = repr(exc)
+                trace.events.append(event)
+                trace.termination_reason = "policy_error"
+                return trace, "policy_error"
+            if directive is not None and (
+                    operations_this_decision < budget.max_operations_per_decision and
+                    budget.operations_used < budget.max_operations_per_task and
+                    depth + 1 < budget.max_depth):
+                event["policy_intervention"] = {"policy_id": policy.policy_id,
+                    "model_decision": copy.deepcopy(choice),
+                    "request": directive.request.as_dict(), "reason": directive.reason}
+                try:
+                    choice = parse_decision(json.dumps({
+                        "kind": "request", "reason": directive.reason,
+                        "operation": directive.request.operation,
+                        "arguments": directive.request.arguments,
+                        "uncertainty": directive.request.objective,
+                        "expected_information": directive.expected_information,
+                        "state_update": choice["state_update"],
+                        "progress_assessment": choice["progress_assessment"],
+                        "progress_evidence": choice["progress_evidence"],
+                        "support_assessment": choice["support_assessment"]}),
+                        set(executor.operations))
+                except (ValueError, TypeError) as exc:
+                    event["error"] = repr(exc)
+                    trace.events.append(event)
+                    trace.termination_reason = "policy_error"
+                    return trace, "policy_error"
+                current = candidate_context
         kind = choice["kind"]
         if kind == "request":
             request = SupportRequest(choice["operation"], choice["arguments"], choice["uncertainty"])
@@ -440,6 +482,20 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
             pending = None
         if kind == "execute":
             trace.final_action = choice["action"] if choice["action"] is not None else current.current_action
+            if policy is not None:
+                try:
+                    selected = policy.choose_action(current, trace.final_action)
+                    if selected is not None and parse_textcraft(selected) != selected:
+                        raise ValueError("Policy returned an invalid environment action")
+                except Exception as exc:
+                    event["error"] = repr(exc)
+                    trace.events.append(event)
+                    trace.termination_reason = "policy_error"
+                    return trace, "policy_error"
+                if selected != trace.final_action:
+                    event["policy_action_selection"] = {"policy_id": policy.policy_id,
+                        "from": trace.final_action, "to": selected}
+                    trace.final_action = selected
             event["action_revision"] = {"from": current.current_action, "to": trace.final_action}
             event["recovery_state_after"] = state.snapshot()
             trace.events.append(event)
@@ -518,10 +574,13 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
 
 def run_recovery_episode(task: dict, config: dict, qwen, gpt, *, memory=None,
                          episode_factory=make_episode, controller=None,
-                         executor=None, clock=time.perf_counter, checkpoint=None) -> dict:
+                         executor=None, clock=time.perf_counter, checkpoint=None,
+                         policy: RecoveryPolicy | None = None) -> dict:
     arm = config["arm"]
     if arm not in ARMS:
         raise ValueError("Unknown recovery arm")
+    if policy is not None and arm != ARMS[1]:
+        raise ValueError("Opt-in recovery policy requires the v4 arm")
     budget = SupportBudget.from_config(config["autonomous_support"]["budget"])
     if executor is None:
         executor = (make_support_executor(config, gpt, memory) if arm == ARMS[0]
@@ -602,7 +661,7 @@ def run_recovery_episode(task: dict, config: dict, qwen, gpt, *, memory=None,
                 loop_started = clock()
                 support_trace, stop = adaptive_loop(gpt, executor, budget, context, state,
                     deadline=deadline, inference_limit=config["limits"]["inference_seconds"],
-                    inference_used=qwen_seconds)
+                    inference_used=qwen_seconds, policy=policy)
                 support_trace.elapsed_seconds = clock() - loop_started
             support_history.extend({"decision": decision, "operation": event["request"]["operation"],
                 "arguments": event["request"]["arguments"],
@@ -695,6 +754,7 @@ def run_recovery_episode(task: dict, config: dict, qwen, gpt, *, memory=None,
                 for record in trace for event in record.get("support_trace", {}).get("events", []))}
            if arm == ARMS[1] else {}),
         "initial_observation": episode.initial_observation, "task_prompt": episode.task_prompt,
+        **({"support_policy_id": policy.policy_id} if policy is not None else {}),
         "success": success, "status": status, "termination_reason": status,
         "environment_actions": actions_taken, "failed_actions": failed_actions,
         "model_decisions": len(trace), "parser_errors": parser_errors,
