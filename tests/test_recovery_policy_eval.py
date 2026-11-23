@@ -88,7 +88,7 @@ class FakeWorker:
 
     def metadata(self):
         return {"gpu_name": "NVIDIA L40S", "model_id": "fake",
-                "attention_implementation": "flex_attention"}
+                "attention_implementation": "eager"}
 
     def begin_episode(self, task_id, seed):
         self.episodes.append((task_id, seed))
@@ -152,7 +152,8 @@ def test_stage_and_batch_route_policies_and_lock_metadata(monkeypatch, tmp_path)
     assert run_meta["implementation_commit"] == "test-commit"
     assert run_meta["policy_sha256"] == policy_digest("accuracy_first_terminal_v1")
     assert run_meta["model_settings"] == plan["model_settings"]
-    assert run_meta["attention_implementation"] == "flex_attention"
+    assert run_meta["attention_implementation"] == "eager"
+    assert run_meta["runtime_feature_checks"] == plan["runtime_feature_checks"]
     assert read_json(first_run / "policy.json") == policy_configuration("accuracy_first_terminal_v1")
     snapshot = read_json(first_run / "checkpoints" / "0000.json")
     assert snapshot["decision_telemetry"][0]["policy_id"] == "accuracy_first_terminal_v1"
@@ -235,15 +236,19 @@ def test_cuda_illegal_access_invalidates_stage_for_all_policies(monkeypatch, tmp
         assert episode["decision_telemetry"][0]["fatal_infrastructure_failure"] is True
     with pytest.raises(ValueError, match="Incompatible smoke run"):
         evaluation.stage_report(tmp_path, "smoke")
+    with pytest.raises(ValueError, match="Incompatible smoke run"):
+        evaluation.runtime_gate(tmp_path)
 
 
-def test_backend_mismatch_refuses_before_task_and_records_active_backend(monkeypatch, tmp_path):
+@pytest.mark.parametrize("active_backend", ["sdpa", "flex_attention"])
+def test_backend_mismatch_refuses_before_task_and_records_active_backend(
+        monkeypatch, tmp_path, active_backend):
     monkeypatch.setattr(evaluation, "require_clean_commit", lambda: "test-commit")
     plan = evaluation._plan(require_runtime=False)
 
     class WrongBackend(FakeWorker):
         def metadata(self):
-            return {**super().metadata(), "attention_implementation": "sdpa"}
+            return {**super().metadata(), "attention_implementation": active_backend}
 
     root = tmp_path / "runs" / "original_v4" / "batch_00"
     with pytest.raises(ValueError, match="active attention backend"):
@@ -254,9 +259,66 @@ def test_backend_mismatch_refuses_before_task_and_records_active_backend(monkeyp
     run_dir = next(root.glob("textcraft_*"))
     meta = read_json(run_dir / "run.json")
     assert meta["status"] == "failed"
-    assert meta["requested_attention_implementation"] == "flex_attention"
-    assert meta["attention_implementation"] == "sdpa"
+    assert meta["requested_attention_implementation"] == "eager"
+    assert meta["attention_implementation"] == active_backend
     assert not list((run_dir / "episodes").glob("*.json"))
+
+
+def test_eager_runtime_preflight_requires_explicit_flags(monkeypatch):
+    required = {"AGENT_SUPPORT_GPTOSS_FLEX_ATTENTION": "0",
+        "AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS": "1",
+        "AGENT_SUPPORT_GPU_MEMORY_DIAGNOSTICS": "1",
+        "AGENT_SUPPORT_GPTOSS_CUDA_CACHE_RELEASE": "0",
+        "CUDA_LAUNCH_BLOCKING": "1"}
+    for key, value in required.items():
+        monkeypatch.setenv(key, value)
+    check = evaluation.preflight("accuracy_first_terminal_v1")
+    assert check["requested_attention_implementation"] == "eager"
+    assert all(check["runtime_feature_checks"].values())
+    monkeypatch.setenv("AGENT_SUPPORT_GPTOSS_FLEX_ATTENTION", "1")
+    assert not evaluation.preflight("accuracy_first_terminal_v1")[
+        "runtime_feature_checks"]["eager_attention_selected"]
+    monkeypatch.setenv("AGENT_SUPPORT_GPTOSS_FLEX_ATTENTION", "0")
+    monkeypatch.setenv("AGENT_SUPPORT_GPTOSS_CUDA_CACHE_RELEASE", "1")
+    assert not evaluation.preflight("original_v4")["runtime_feature_checks"][
+        "cuda_cache_release_disabled"]
+
+
+def test_terminal_runtime_gate_checks_episode_and_memory(monkeypatch, tmp_path):
+    monkeypatch.setattr(evaluation, "require_clean_commit", lambda: "test-commit")
+    plan = evaluation._plan(require_runtime=False)
+
+    def reviewed_episode(*args, **kwargs):
+        result = fake_episode(*args, **kwargs)
+        result["trace"][0]["support_trace"]["events"][0]["terminal_review"] = {
+            "policy_id": "accuracy_first_terminal_v1", "outcome": "rescue"}
+        return result
+
+    run_dir = evaluation._run_tasks(
+        tmp_path / "smoke" / "accuracy_first_terminal_v1",
+        "accuracy_first_terminal_v1", [0], plan, qwen_factory=lambda _config: object(),
+        gpt_factory=FakeWorker, memory_factory=lambda *_: None,
+        episode_runner=reviewed_episode)
+    diagnostics = run_dir / "diagnostics"
+    diagnostics.mkdir()
+    for label in ("gpt_oss_cuda_memory", "qwen_cuda_memory"):
+        (diagnostics / f"{label}_synthetic.jsonl").write_text(
+            json.dumps({"memory": {"peak_reserved_bytes": 35_000_000_000,
+                                   "global_free_bytes": 8_000_000_000}}) + "\n")
+    gate = evaluation.runtime_gate(tmp_path)
+    assert gate["ready"] and gate["terminal_review_observed"]
+    assert gate["terminal_review_outcomes"] == ["rescue"]
+    assert gate["memory_telemetry"]["gpt_oss_cuda_memory"]["peak_reserved_bytes"] == 35_000_000_000
+    assert gate["memory_telemetry"]["qwen_cuda_memory"]["minimum_global_free_bytes"] == 8_000_000_000
+    with pytest.raises(ValueError, match="Missing qwen_cuda_memory"):
+        (diagnostics / "qwen_cuda_memory_synthetic.jsonl").unlink()
+        evaluation.runtime_gate(tmp_path)
+
+
+def test_nonterminal_smoke_requires_valid_terminal_runtime_gate(monkeypatch, tmp_path):
+    monkeypatch.setattr(evaluation, "require_clean_commit", lambda: "test-commit")
+    with pytest.raises(ValueError, match="requires exactly one accuracy_first_terminal_v1"):
+        evaluation.run_stage(tmp_path, "original_v4", "smoke")
 
 
 def test_backend_fallback_stops_new_evaluator_without_changing_v4(monkeypatch, tmp_path):

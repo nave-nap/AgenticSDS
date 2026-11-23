@@ -26,10 +26,13 @@ from .recovery_v4_eval import (MANIFEST_SHA256, RECIPE_SHA256, config_for,
                                preflight as v4_preflight)
 from .runner import package_versions
 
-PROTOCOL = "textcraft_recovery_policy30_terminal_review_v1"
+PROTOCOL = "textcraft_recovery_policy30_eager_terminal_review_v1"
 BASE_ARM = "autonomous_recovery_v4"
-REQUESTED_ATTENTION = "flex_attention"
+REQUESTED_ATTENTION = "eager"
 TRACEBACK_ENV = "AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS"
+MEMORY_DIAGNOSTICS_ENV = "AGENT_SUPPORT_GPU_MEMORY_DIAGNOSTICS"
+CACHE_RELEASE_ENV = "AGENT_SUPPORT_GPTOSS_CUDA_CACHE_RELEASE"
+TERMINAL_POLICY = "accuracy_first_terminal_v1"
 BATCH_SIZE = 3
 TASK_COUNT = 30
 STAGES = {"smoke": (0,), "pilot": (0, 1, 2)}
@@ -48,8 +51,11 @@ def preflight(policy_id: str) -> dict:
         "manifest_sha256": MANIFEST_SHA256,
         "requested_attention_implementation": REQUESTED_ATTENTION,
         "runtime_feature_checks": {
-            "flex_attention_opted_in": os.environ.get(FLEX_ATTENTION_ENV) == "1",
-            "worker_tracebacks_enabled": os.environ.get(TRACEBACK_ENV) == "1"},
+            "eager_attention_selected": os.environ.get(FLEX_ATTENTION_ENV) == "0",
+            "worker_tracebacks_enabled": os.environ.get(TRACEBACK_ENV) == "1",
+            "gpu_memory_diagnostics_enabled": os.environ.get(MEMORY_DIAGNOSTICS_ENV) == "1",
+            "cuda_cache_release_disabled": os.environ.get(CACHE_RELEASE_ENV) == "0",
+            "cuda_launch_blocking_enabled": os.environ.get("CUDA_LAUNCH_BLOCKING") == "1"},
         "model_settings": {"qwen": {key: config[key] for key in
             ("model_id", "model_revision", "quantization", "max_new_tokens", "seed")},
             "gpt_oss": config["autonomous_support"]["model"],
@@ -81,6 +87,7 @@ def _plan(require_runtime: bool) -> dict:
         "implementation_commit": commit, "base_arm": BASE_ARM,
         "requested_attention_implementation": REQUESTED_ATTENTION,
         "worker_tracebacks_enabled": True,
+        "runtime_feature_checks": base["runtime_feature_checks"],
         "base_config_sha256": base["base_config_sha256"],
         "manifest_sha256": MANIFEST_SHA256,
         "recipe_order_sha256": RECIPE_SHA256,
@@ -135,6 +142,7 @@ def _run_tasks(root: Path, policy_id: str, indices: list[int], plan: dict,
         "implementation_commit": plan["implementation_commit"],
         "requested_attention_implementation": plan["requested_attention_implementation"],
         "worker_tracebacks_enabled": plan["worker_tracebacks_enabled"],
+        "runtime_feature_checks": plan["runtime_feature_checks"],
         "base_arm": BASE_ARM, "base_config_sha256": plan["base_config_sha256"],
         "model_settings": plan["model_settings"], "limits": plan["limits"],
         "manifest_sha256": MANIFEST_SHA256, "recipe_order_sha256": RECIPE_SHA256,
@@ -209,6 +217,8 @@ def run_stage(root: str | Path, policy_id: str, stage: str) -> Path:
         raise ValueError("Unknown policy or stage")
     if stage == "pilot":
         stage_report(root, "smoke")
+    elif policy_id != TERMINAL_POLICY:
+        runtime_gate(root)
     plan = _plan(require_runtime=True)
     directory = Path(root) / stage / policy_id
     directory.mkdir(parents=True, exist_ok=True)
@@ -217,7 +227,8 @@ def run_stage(root: str | Path, policy_id: str, stage: str) -> Path:
     return _run_tasks(directory, policy_id, list(STAGES[stage]), plan)
 
 
-def stage_report(root: str | Path, stage: str) -> dict:
+def stage_report(root: str | Path, stage: str,
+                 policy_ids: tuple[str, ...] = POLICIES) -> dict:
     """CPU-only gate: one matched, infrastructure-valid run per policy."""
     if stage not in STAGES:
         raise ValueError("Unknown stage")
@@ -225,7 +236,7 @@ def stage_report(root: str | Path, stage: str) -> dict:
     tasks = manifest()["tasks"]
     indices = list(STAGES[stage])
     results = {}
-    for policy_id in POLICIES:
+    for policy_id in policy_ids:
         paths = sorted((Path(root) / stage / policy_id).glob("textcraft_*"))
         if len(paths) != 1:
             raise ValueError(f"{stage} requires exactly one {policy_id} run")
@@ -237,6 +248,7 @@ def stage_report(root: str | Path, stage: str) -> dict:
                 meta.get("attention_implementation") != REQUESTED_ATTENTION or
                 meta.get("gptoss_metadata", {}).get("attention_implementation") != REQUESTED_ATTENTION or
                 meta.get("worker_tracebacks_enabled") is not True or
+                meta.get("runtime_feature_checks") != plan["runtime_feature_checks"] or
                 meta.get("policy_id") != policy_id or
                 meta.get("policy_sha256") != plan["policy_sha256"][policy_id] or
                 meta.get("policy_configuration") != policy_configuration(policy_id) or
@@ -287,6 +299,34 @@ def stage_report(root: str | Path, stage: str) -> dict:
             "ready": True}
 
 
+def runtime_gate(root: str | Path) -> dict:
+    """Validate the first real-model terminal-policy episode before other arms."""
+    report = stage_report(root, "smoke", (TERMINAL_POLICY,))
+    run_dir = Path(report["policy_runs"][TERMINAL_POLICY]["run_dir"])
+    episode = read_json(next((run_dir / "episodes").glob("*.json")))
+    review_events = [review for decision in episode["decision_telemetry"]
+                     for review in decision["terminal_reviews"]]
+    memory = {}
+    for label in ("gpt_oss_cuda_memory", "qwen_cuda_memory"):
+        paths = list((run_dir / "diagnostics").glob(f"{label}_*.jsonl"))
+        if len(paths) != 1:
+            raise ValueError(f"Missing {label} memory telemetry: {run_dir}")
+        snapshots = [event["memory"] for line in paths[0].read_text().splitlines()
+                     if (event := json.loads(line)).get("memory")]
+        peaks = [snapshot["peak_reserved_bytes"] for snapshot in snapshots
+                 if isinstance(snapshot.get("peak_reserved_bytes"), int)]
+        if not peaks:
+            raise ValueError(f"Missing {label} peak GPU memory: {run_dir}")
+        free = [snapshot["global_free_bytes"] for snapshot in snapshots
+                if isinstance(snapshot.get("global_free_bytes"), int)]
+        memory[label] = {"peak_reserved_bytes": max(peaks),
+                         "minimum_global_free_bytes": min(free) if free else None,
+                         "path": str(paths[0])}
+    return {**report, "terminal_review_observed": bool(review_events),
+            "terminal_review_outcomes": [item.get("outcome") for item in review_events],
+            "memory_telemetry": memory}
+
+
 def completed(root: str | Path, policy_id: str, plan: dict) -> dict[str, dict]:
     if policy_id not in POLICIES:
         raise ValueError("Unknown policy")
@@ -303,6 +343,7 @@ def completed(root: str | Path, policy_id: str, plan: dict) -> dict[str, dict]:
                 meta.get("attention_implementation") != REQUESTED_ATTENTION or
                 meta.get("gptoss_metadata", {}).get("attention_implementation") != REQUESTED_ATTENTION or
                 meta.get("worker_tracebacks_enabled") is not True or
+                meta.get("runtime_feature_checks") != plan["runtime_feature_checks"] or
                 meta.get("policy_sha256") != plan["policy_sha256"][policy_id] or
                 meta.get("policy_configuration") != policy_configuration(policy_id) or
                 meta.get("implementation_commit") != plan["implementation_commit"] or
@@ -540,6 +581,8 @@ def main() -> None:
         command.add_argument("--policy", choices=POLICIES, required=True)
         if name in {"status", "run-batch"}:
             command.add_argument("--batch", type=int, required=True)
+        if name == "status":
+            command.add_argument("--require-complete", action="store_true")
         if name == "run-batch":
             command.add_argument("--max-tasks-per-attempt", type=int, default=BATCH_SIZE)
         if name == "aggregate":
@@ -550,6 +593,9 @@ def main() -> None:
     stage_check = sub.add_parser("stage-report")
     stage_check.add_argument("--root", required=True)
     stage_check.add_argument("--stage", choices=tuple(STAGES), required=True)
+    stage_check.add_argument("--policy", choices=POLICIES)
+    gate = sub.add_parser("runtime-gate")
+    gate.add_argument("--root", required=True)
     args = parser.parse_args()
     if args.command == "preflight":
         result = preflight(args.policy)
@@ -560,9 +606,15 @@ def main() -> None:
     elif args.command in STAGES:
         result = {"run_dir": str(run_stage(args.root, args.policy, args.command))}
     elif args.command == "stage-report":
-        result = stage_report(args.root, args.stage)
+        result = stage_report(args.root, args.stage,
+                              (args.policy,) if args.policy else POLICIES)
+    elif args.command == "runtime-gate":
+        result = runtime_gate(args.root)
     elif args.command == "status":
         result = status(args.root, args.policy, args.batch)
+        if args.require_complete and (result["blocking_run_status"] or
+                                      result["missing_indices"]):
+            raise ValueError("Policy batch is incomplete or infrastructure-invalid")
     elif args.command == "run-batch":
         result = run_batch(args.root, args.policy, args.batch, args.max_tasks_per_attempt)
     elif args.command == "aggregate":
