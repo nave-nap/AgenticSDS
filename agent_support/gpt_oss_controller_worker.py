@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import sys
+import traceback
 
 from .gpu_memory_diagnostics import cache_release_enabled
 
@@ -64,6 +65,8 @@ def serve(source=None, sink=None, model_factory=None) -> None:
                 raise ValueError(f"Unknown controller worker operation: {op}")
         except Exception as exc:
             response = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+            if os.environ.get("AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS") == "1":
+                response["traceback"] = traceback.format_exc()
         if release_after_generation and cache_release_enabled():
             # The generation frame and exception handler have both unwound here.
             try:

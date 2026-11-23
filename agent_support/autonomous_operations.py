@@ -8,7 +8,8 @@ import time
 from .autonomous_support import (SupportContext, SupportCost, SupportReservation,
                                  SupportResult, register_support_operation)
 from .common import canonical_digest
-from .controller_backend import (ControllerWorkerOOM, ControllerWorkerUnavailable,
+from .controller_backend import (ControllerWorkerFatalCUDA, ControllerWorkerOOM,
+                                 ControllerWorkerUnavailable,
                                  worker_failure_marker)
 from .policy import parse_alfworld, parse_textcraft
 
@@ -138,7 +139,7 @@ class RetrieveEpisodicMemory:
         try:
             hits, elapsed = self.memory.search(context.benchmark, arguments["query"],
                                                arguments["scope"], arguments["top_k"])
-        except (ControllerWorkerOOM, ControllerWorkerUnavailable) as exc:
+        except (ControllerWorkerOOM, ControllerWorkerFatalCUDA, ControllerWorkerUnavailable) as exc:
             elapsed = time.perf_counter() - started
             return SupportResult("error", cost=SupportCost(model_calls=1, inference_seconds=elapsed),
                                  metadata={"retrieval_seconds": elapsed, "error": repr(exc),
@@ -243,7 +244,7 @@ class ReasonOverArtifacts:
         messages = self._messages(arguments, context)
         try:
             generation = self.model.generate(messages, max_new_tokens=self.max_new_tokens)
-        except (ControllerWorkerOOM, ControllerWorkerUnavailable) as exc:
+        except (ControllerWorkerOOM, ControllerWorkerFatalCUDA, ControllerWorkerUnavailable) as exc:
             return SupportResult("error", cost=SupportCost(1, getattr(self, "_reserved_input_tokens", 0), 0),
                                  metadata={"prompt_sha256": canonical_digest(messages),
                                            "backend_error": repr(exc), "usage_estimated": True,

@@ -9,7 +9,8 @@ from agent_support.autonomous_support import (ControllerResponse, SupportBudget,
     SupportContext, SupportDecision, SupportExecutor, SupportRequest,
     SupportReservation, make_support_controller, run_support_loop)
 from agent_support.autonomous_operations import ReasonOverArtifacts
-from agent_support.controller_backend import ControllerWorkerOOM, ControllerWorkerUnavailable
+from agent_support.controller_backend import (ControllerWorkerFatalCUDA,
+    ControllerWorkerOOM, ControllerWorkerUnavailable)
 from agent_support.policy import parse_textcraft
 from agent_support.recovery_v4 import (AnalyzeFailures, RecoveryState, VerifyPrerequisites,
     SYSTEM, adaptive_loop, parse_decision, recovery_executor, run_recovery_episode)
@@ -499,6 +500,34 @@ def test_controller_cuda_oom_after_prior_action_stops_further_steps():
     assert result["trace"][1]["support_trace"]["events"][0]["usage_estimated"] is True
 
 
+def test_fatal_cuda_after_prior_action_stops_before_repeated_worker_error():
+    detail = "CUDA error: an illegal memory access was encountered"
+    gpt = ErrorGpt([choice("execute", action="inventory", expected_outcome="inventory feedback"),
+                    ControllerWorkerFatalCUDA("AcceleratorError", detail, "kernel stack"),
+                    RuntimeError("repeated poisoned worker error")])
+    config = config_for("autonomous_recovery_v4")
+    config["autonomous_support"]["operations"] = []
+    episode = Episode()
+    checkpoints = []
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": episode.initial_observation},
+        config, Qwen(), gpt, episode_factory=lambda *_: episode, checkpoint=checkpoints.append)
+    assert result["status"] == result["termination_reason"] == "controller_cuda_fatal"
+    assert episode.steps == ["inventory"]
+    assert result["environment_actions"] == 1 and result["model_decisions"] == 2
+    assert result["controller_model_calls"] == 2 and result["controller_fallbacks"] == 0
+    assert result["controller_input_tokens"] == 40 and result["controller_output_tokens"] == 10
+    record = result["trace"][1]
+    assert record["decision"] == 2 and record["action"] is None
+    assert record["termination_reason"] == "controller_cuda_fatal"
+    event = record["support_trace"]["events"][0]
+    assert event["error_detail"] == detail and "AcceleratorError" in event["error"]
+    assert event["worker_traceback"] == "kernel stack"
+    assert event["usage_estimated"] is True
+    assert event["controller_cost"] == {"model_calls": 1, "input_tokens": 20,
+                                         "output_tokens": 0, "inference_seconds": 0.0}
+    assert checkpoints[-1]["trace"][1]["action"] is None
+
+
 def test_worker_oom_during_reservation_terminates_without_model_charge():
     class OOMAtCount(ErrorGpt):
         def count_messages_tokens(self, messages):
@@ -572,6 +601,19 @@ def test_expanded_v3_controller_oom_keeps_existing_fallback():
     assert result["status"] == "max_actions"
 
 
+def test_expanded_v3_fatal_cuda_keeps_existing_fallback():
+    gpt = ErrorGpt([ControllerWorkerFatalCUDA("AcceleratorError",
+        "CUDA error: an illegal memory access was encountered")])
+    config = config_for("expanded_v3_v1")
+    config["max_actions"] = config["max_decisions"] = 1
+    episode = Episode()
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": episode.initial_observation},
+        config, Qwen(), gpt, episode_factory=lambda *_: episode,
+        controller=make_support_controller(config, gpt), executor=SupportExecutor({}))
+    assert result["status"] == "max_actions" and episode.steps == ["inventory"]
+    assert result["trace"][0]["support_trace"]["termination_reason"] == "controller_backend_error"
+
+
 def test_reason_over_artifacts_oom_preserves_cost_and_stops_v4():
     detail = "support generation CUDA allocation failed"
     gpt = ErrorGpt([
@@ -603,8 +645,33 @@ def test_reason_over_artifacts_oom_preserves_cost_and_stops_v4():
     assert checkpoints[-1]["trace"][0]["support_trace"]["events"][0]["result"] == event["result"]
 
 
+def test_reason_over_artifacts_fatal_cuda_preserves_typed_marker():
+    failure = ControllerWorkerFatalCUDA("AcceleratorError",
+        "CUDA error: an illegal memory access was encountered", "kernel stack")
+    gpt = ErrorGpt([
+        choice("request", operation="reason_over_artifacts_v1",
+               arguments={"objective": "inspect evidence", "output_type": "plan"}),
+        failure,
+    ])
+    config = config_for("autonomous_recovery_v4")
+    config["autonomous_support"]["operations"] = ["reason_over_artifacts_v1"]
+    episode = Episode()
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": episode.initial_observation},
+        config, Qwen(), gpt, episode_factory=lambda *_: episode)
+    assert result["status"] == "controller_cuda_fatal" and episode.steps == []
+    assert result["support_calls"] == 1 and result["support_model_calls"] == 1
+    event = result["trace"][0]["support_trace"]["events"][0]
+    assert event["result"]["metadata"]["worker_failure"] == {
+        "kind": "cuda_fatal", "detail": failure.detail,
+        "error_type": "AcceleratorError", "worker_traceback": "kernel stack"}
+    assert event["worker_traceback"] == "kernel stack"
+    assert result["trace"][0]["action"] is None
+
+
 @pytest.mark.parametrize("failure,status,kind", [
     (ControllerWorkerOOM("registered support OOM"), "controller_cuda_oom", "cuda_oom"),
+    (ControllerWorkerFatalCUDA("AcceleratorError", "CUDA error: device-side assert triggered"),
+     "controller_cuda_fatal", "cuda_fatal"),
     (ControllerWorkerUnavailable("registered support stream closed"),
      "controller_worker_unavailable", "unavailable"),
 ])
@@ -638,7 +705,10 @@ def test_registered_support_worker_failure_uses_reserved_cost_once(failure, stat
     assert event["result"]["cost"] == {"model_calls": 1, "input_tokens": 13,
                                          "output_tokens": 0, "inference_seconds": 0.0}
     assert event["result"]["metadata"]["usage_estimated"] is True
-    assert event["result"]["metadata"]["worker_failure"] == {"kind": kind, "detail": failure.detail}
+    marker = event["result"]["metadata"]["worker_failure"]
+    assert marker["kind"] == kind and marker["detail"] == failure.detail
+    if kind == "cuda_fatal":
+        assert marker["error_type"] == "AcceleratorError"
     assert event["error_detail"] == failure.detail
     assert result["trace"][0]["action"] is None
 
