@@ -31,17 +31,21 @@ class RecoveryPolicy(Protocol):
 
 class AccuracyFirstPolicy:
     policy_id = "accuracy_first_v1"
-    multi_candidate = True
+    failure_feedback_prefixes = ("Could not", "Wrong item")
+    failure_reset_feedback_prefixes = ("Got ", "Crafted ")
+    failure_analysis_limit = 8
+    memory_scope = "both"
+    memory_top_k = 3
+    generated_candidates_on_stall = 2
 
-    @staticmethod
-    def _failed(feedback: str) -> bool:
-        return feedback.startswith(("Could not", "Wrong item"))
+    def _failed(self, feedback: str) -> bool:
+        return feedback.startswith(self.failure_feedback_prefixes)
 
-    @staticmethod
-    def _active_history(context: SupportContext) -> tuple[tuple[str, str], ...]:
+    def _active_history(self, context: SupportContext) -> tuple[tuple[str, str], ...]:
         """A successful get/craft can make a previously failed attempt viable."""
         last_change = max((index for index, (_, feedback) in enumerate(context.history)
-                           if feedback.startswith(("Got ", "Crafted "))), default=-1)
+                           if feedback.startswith(self.failure_reset_feedback_prefixes)),
+                          default=-1)
         return context.history[last_change + 1:]
 
     def _stalled(self, context: SupportContext, state) -> bool:
@@ -83,7 +87,7 @@ class AccuracyFirstPolicy:
             return PolicyDirective(SupportRequest(operation, arguments, reason), reason, reason)
 
         if stalled:
-            selected = request("analyze_failures_v1", {"limit": 8},
+            selected = request("analyze_failures_v1", {"limit": self.failure_analysis_limit},
                                "Identify repeated failures and their observed feedback")
             if selected:
                 return selected
@@ -98,15 +102,16 @@ class AccuracyFirstPolicy:
             query = (f"Goal: {state.objective}; candidate: {action or 'none'}; "
                      f"failed feedback: {recent_failure}")[:1000]
             selected = request("retrieve_episodic_memory_v1",
-                               {"query": query, "scope": "both", "top_k": 3},
+                               {"query": query, "scope": self.memory_scope,
+                                "top_k": self.memory_top_k},
                                "Find relevant successful prior steps for the current failure")
             if selected:
                 return selected
-        if stalled and self.multi_candidate and "reason_over_artifacts_v1" in available:
+        if stalled and self.generated_candidates_on_stall and "reason_over_artifacts_v1" in available:
             prior_searches = sum(operation == "reason_over_artifacts_v1" and
                                  arguments.get("output_type") == "candidate_action"
                                  for operation, arguments in used)
-            if prior_searches < 2:
+            if prior_searches < self.generated_candidates_on_stall:
                 first = next((result.proposed_action for result in context.results
                               if result.status == "ok" and result.proposed_action), "none")
                 objective = (
@@ -178,4 +183,4 @@ class StateAwarePolicy(AccuracyFirstPolicy):
     """Matched selector with state and verification but no candidate search."""
 
     policy_id = "state_aware_v1"
-    multi_candidate = False
+    generated_candidates_on_stall = 0
