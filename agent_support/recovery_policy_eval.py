@@ -14,6 +14,7 @@ from .autonomous_evaluation import require_clean_commit
 from .common import canonical_digest, read_json, write_json_atomic
 from .controller_backend import GptOssControllerWorker
 from .gpu_memory_diagnostics import enabled as gpu_memory_diagnostics_enabled
+from .gpt_oss_model import FLEX_ATTENTION_ENV
 from .heldout50_analysis import paired_interval, wilson
 from .model import QwenModel
 from .recovery_policy_registry import (POLICIES, make_policy, policy_configuration,
@@ -25,8 +26,10 @@ from .recovery_v4_eval import (MANIFEST_SHA256, RECIPE_SHA256, config_for,
                                preflight as v4_preflight)
 from .runner import package_versions
 
-PROTOCOL = "textcraft_recovery_policy30_v1"
+PROTOCOL = "textcraft_recovery_policy30_flex_runtime_v1"
 BASE_ARM = "autonomous_recovery_v4"
+REQUESTED_ATTENTION = "flex_attention"
+TRACEBACK_ENV = "AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS"
 BATCH_SIZE = 3
 TASK_COUNT = 30
 STAGES = {"smoke": (0,), "pilot": (0, 1, 2)}
@@ -43,6 +46,10 @@ def preflight(policy_id: str) -> dict:
                                else policy.policy_id == policy_id,
         "base_arm": BASE_ARM, "base_config_sha256": canonical_digest(config),
         "manifest_sha256": MANIFEST_SHA256,
+        "requested_attention_implementation": REQUESTED_ATTENTION,
+        "runtime_feature_checks": {
+            "flex_attention_opted_in": os.environ.get(FLEX_ATTENTION_ENV) == "1",
+            "worker_tracebacks_enabled": os.environ.get(TRACEBACK_ENV) == "1"},
         "model_settings": {"qwen": {key: config[key] for key in
             ("model_id", "model_revision", "quantization", "max_new_tokens", "seed")},
             "gpt_oss": config["autonomous_support"]["model"],
@@ -54,19 +61,26 @@ def preflight(policy_id: str) -> dict:
         "v4_preflight": base}
 
 
+def runtime_preflight_passed(check: dict) -> bool:
+    base = check["v4_preflight"]
+    return (check["selector_matches_id"] and
+            all(check["runtime_feature_checks"].values()) and
+            all(base["protocol_checks"].values()) and
+            all(base["runtime_checks"].values()) and
+            base["memory"]["available"])
+
+
 def _plan(require_runtime: bool) -> dict:
     commit = require_clean_commit()
     checks = {policy: preflight(policy) for policy in POLICIES}
-    if require_runtime and any(
-            not check["selector_matches_id"] or
-            not all(check["v4_preflight"]["protocol_checks"].values()) or
-            not all(check["v4_preflight"]["runtime_checks"].values()) or
-            not check["v4_preflight"]["memory"]["available"]
-            for check in checks.values()):
+    if require_runtime and not all(runtime_preflight_passed(check)
+                                   for check in checks.values()):
         raise ValueError("Policy evaluation runtime preflight failed")
     base = checks["original_v4"]
     return {"schema_version": 1, "protocol": PROTOCOL,
         "implementation_commit": commit, "base_arm": BASE_ARM,
+        "requested_attention_implementation": REQUESTED_ATTENTION,
+        "worker_tracebacks_enabled": True,
         "base_config_sha256": base["base_config_sha256"],
         "manifest_sha256": MANIFEST_SHA256,
         "recipe_order_sha256": RECIPE_SHA256,
@@ -119,6 +133,8 @@ def _run_tasks(root: Path, policy_id: str, indices: list[int], plan: dict,
         "policy_id": policy_id, "policy_sha256": plan["policy_sha256"][policy_id],
         "policy_configuration": policy_configuration(policy_id),
         "implementation_commit": plan["implementation_commit"],
+        "requested_attention_implementation": plan["requested_attention_implementation"],
+        "worker_tracebacks_enabled": plan["worker_tracebacks_enabled"],
         "base_arm": BASE_ARM, "base_config_sha256": plan["base_config_sha256"],
         "model_settings": plan["model_settings"], "limits": plan["limits"],
         "manifest_sha256": MANIFEST_SHA256, "recipe_order_sha256": RECIPE_SHA256,
@@ -131,8 +147,11 @@ def _run_tasks(root: Path, policy_id: str, indices: list[int], plan: dict,
     try:
         gpt = gpt_factory(config["autonomous_support"]["model"], run_dir / "workers")
         meta["gptoss_metadata"] = gpt.metadata()
+        meta["attention_implementation"] = meta["gptoss_metadata"].get("attention_implementation")
         if "L40S" not in meta["gptoss_metadata"].get("gpu_name", ""):
             raise ValueError("Recovery policy evaluation requires an L40S")
+        if meta["attention_implementation"] != plan["requested_attention_implementation"]:
+            raise ValueError("GPT-OSS active attention backend differs from requested backend")
         write_json_atomic(run_dir / "run.json", meta)
         qwen = qwen_factory(config)
         if gpu_memory_diagnostics_enabled():
@@ -214,6 +233,10 @@ def stage_report(root: str | Path, stage: str) -> dict:
         meta = read_json(run_dir / "run.json")
         if (meta.get("status") != "complete" or meta.get("protocol") != PROTOCOL or
                 "L40S" not in meta.get("gptoss_metadata", {}).get("gpu_name", "") or
+                meta.get("requested_attention_implementation") != REQUESTED_ATTENTION or
+                meta.get("attention_implementation") != REQUESTED_ATTENTION or
+                meta.get("gptoss_metadata", {}).get("attention_implementation") != REQUESTED_ATTENTION or
+                meta.get("worker_tracebacks_enabled") is not True or
                 meta.get("policy_id") != policy_id or
                 meta.get("policy_sha256") != plan["policy_sha256"][policy_id] or
                 meta.get("policy_configuration") != policy_configuration(policy_id) or
@@ -276,6 +299,10 @@ def completed(root: str | Path, policy_id: str, plan: dict) -> dict[str, dict]:
         indices = meta.get("task_indices")
         if (meta.get("protocol") != PROTOCOL or meta.get("policy_id") != policy_id or
                 "L40S" not in meta.get("gptoss_metadata", {}).get("gpu_name", "") or
+                meta.get("requested_attention_implementation") != REQUESTED_ATTENTION or
+                meta.get("attention_implementation") != REQUESTED_ATTENTION or
+                meta.get("gptoss_metadata", {}).get("attention_implementation") != REQUESTED_ATTENTION or
+                meta.get("worker_tracebacks_enabled") is not True or
                 meta.get("policy_sha256") != plan["policy_sha256"][policy_id] or
                 meta.get("policy_configuration") != policy_configuration(policy_id) or
                 meta.get("implementation_commit") != plan["implementation_commit"] or
@@ -496,6 +523,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     pre = sub.add_parser("preflight")
     pre.add_argument("--policy", choices=POLICIES, required=True)
+    pre.add_argument("--strict-runtime", action="store_true")
     init = sub.add_parser("init")
     init.add_argument("--root", required=True)
     for stage in STAGES:
@@ -521,6 +549,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "preflight":
         result = preflight(args.policy)
+        if args.strict_runtime and not runtime_preflight_passed(result):
+            raise ValueError("CPU-only Locust runtime preflight failed")
     elif args.command == "init":
         result = initialize(args.root)
     elif args.command in STAGES:

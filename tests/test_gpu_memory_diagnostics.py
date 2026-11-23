@@ -137,6 +137,23 @@ def fake_gpt(torch_api, telemetry, generate):
     return model
 
 
+def test_fatal_cuda_generation_skips_post_failure_cuda_snapshot(tmp_path):
+    class AcceleratorError(RuntimeError):
+        pass
+
+    torch_api = FakeTorch()
+    telemetry = GpuMemoryDiagnostics(tmp_path, "gpt_oss_cuda_memory", torch_api)
+    model = fake_gpt(torch_api, telemetry, lambda **_: (_ for _ in ()).throw(
+        AcceleratorError("CUDA driver error: an illegal memory access was encountered")))
+    with pytest.raises(AcceleratorError, match="illegal memory access"):
+        model.generate([{"role": "user", "content": "inventory"}])
+    end = events(tmp_path)[-1]
+    assert end["event"] == "generation_end"
+    assert end["memory"] == {"skipped_after_generation_error": True}
+    assert model._last_failed_phase == "model_generate"
+    assert model._generation_request_id == 1
+
+
 def test_opt_in_switch_and_worker_directory(monkeypatch, tmp_path):
     monkeypatch.delenv(ENABLE_ENV, raising=False)
     monkeypatch.delenv(CACHE_RELEASE_ENV, raising=False)

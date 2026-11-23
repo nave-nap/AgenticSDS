@@ -22,6 +22,8 @@ test -r "$AGENT_SUPPORT_M2_200_ARTIFACT_DIR/index_200.json"
 export PYTHONHASHSEED=0
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
+export AGENT_SUPPORT_GPTOSS_FLEX_ATTENTION=1
+export AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS=1
 nvidia-smi --query-gpu=name,memory.total --format=csv
 cd "$repo_root"
 "$venv_path/bin/python" -m agent_support.recovery_policy_eval "$RECOVERY_STAGE" \

@@ -6,7 +6,9 @@ import contextlib
 import json
 import os
 import sys
+import traceback
 
+from .controller_backend import _fatal_cuda_response
 from .gpu_memory_diagnostics import cache_release_enabled
 
 
@@ -15,6 +17,7 @@ def serve(source=None, sink=None, model_factory=None) -> None:
     model = None
     for line in source:
         release_after_generation = False
+        op = None
         try:
             request = json.loads(line)
             op = request["op"]
@@ -59,8 +62,26 @@ def serve(source=None, sink=None, model_factory=None) -> None:
             else:
                 raise ValueError(f"Unknown controller worker operation: {op}")
         except Exception as exc:
+            original_traceback = (traceback.format_exc()
+                                  if os.environ.get("AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS") == "1"
+                                  else None)
             response = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
-        if release_after_generation and cache_release_enabled():
+            if op == "generate" and model is not None:
+                request_id = getattr(model, "_generation_request_id", None)
+                failed_phase = getattr(model, "_last_failed_phase", None)
+                if request_id is not None:
+                    response["request_id"] = request_id
+                if failed_phase is not None:
+                    response["failed_phase"] = failed_phase
+            if original_traceback is not None:
+                request_label = response.get("request_id")
+                response["traceback"] = (f"GPT-OSS request {request_label}\n"
+                                         if request_label is not None else "") + original_traceback
+                print(response["traceback"], file=sys.stderr, flush=True)
+        fatal_cuda = (not response.get("ok") and
+                      _fatal_cuda_response(response.get("error_type", ""),
+                                           response.get("error", "")))
+        if release_after_generation and not fatal_cuda and cache_release_enabled():
             # The generation frame and exception handler have both unwound here.
             try:
                 with contextlib.redirect_stdout(sys.stderr):

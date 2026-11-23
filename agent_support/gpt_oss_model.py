@@ -15,7 +15,24 @@ import time
 
 from packaging.version import Version
 
+from .controller_backend import _fatal_cuda_response
 from .gpu_memory_diagnostics import DIRECTORY_ENV, GpuMemoryDiagnostics, enabled
+
+FLEX_ATTENTION_ENV = "AGENT_SUPPORT_GPTOSS_FLEX_ATTENTION"
+
+
+def attention_load_kwargs(torch_api) -> dict:
+    """Select the pinned model's FlexAttention path only on explicit opt-in."""
+    setting = os.environ.get(FLEX_ATTENTION_ENV, "0")
+    if setting not in {"0", "1"}:
+        raise ValueError(f"{FLEX_ATTENTION_ENV} must be 0 or 1")
+    if setting == "0":
+        return {}
+    from transformers.utils import is_torch_flex_attn_available
+
+    if not is_torch_flex_attn_available() or torch_api.cuda.get_device_capability(0) < (8, 0):
+        raise RuntimeError("GPT-OSS FlexAttention requires a compatible PyTorch CUDA runtime and GPU")
+    return {"attn_implementation": "flex_attention"}
 
 
 
@@ -305,7 +322,12 @@ class GptOss20BModel:
             raise RuntimeError("GPT-OSS tokenizer lacks the Harmony final-return token")
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_id, device_map={"": 0}, dtype="auto", low_cpu_mem_usage=True,
+            **attention_load_kwargs(torch),
             **revision)
+        self.flex_attention_enabled = os.environ.get(FLEX_ATTENTION_ENV, "0") == "1"
+        self.attention_implementation = self.model.config._attn_implementation
+        if (self.flex_attention_enabled and self.attention_implementation != "flex_attention"):
+            raise RuntimeError("GPT-OSS did not activate the requested FlexAttention backend")
         self.model.eval()
         from transformers.integrations import mxfp4 as mxfp4_integration
         self.quantization_verification = verify_packed_mxfp4(
@@ -317,11 +339,14 @@ class GptOss20BModel:
         self.memory_diagnostics = (GpuMemoryDiagnostics(directory, "gpt_oss_cuda_memory", torch)
                                    if directory else None)
         self._diagnostic_request_id = 0
+        self._generation_request_id = 0
+        self._last_failed_phase = None
 
     def metadata(self) -> dict:
         return {"model_type": "gpt_oss_20b", "model_id": self.model_id,
                 "model_revision": self.model_revision, "tokenizer_revision": self.model_revision,
                 "backend": "transformers", "backend_version": self.backend_version,
+                "attention_implementation": self.attention_implementation,
                 "quantization": "mxfp4_packed", **self.quantization_verification,
                 "chat_template": "pinned_tokenizer_harmony", "prompt_date": self.prompt_date,
                 "chat_template_sha256": hashlib.sha256(self.chat_template.encode()).hexdigest(),
@@ -373,10 +398,11 @@ class GptOss20BModel:
     def generate(self, messages: list[dict], max_new_tokens: int | None = None) -> dict:
         limit = self.max_new_tokens if max_new_tokens is None else max_new_tokens
         diagnostics = self.memory_diagnostics
-        request_id = None
+        self._generation_request_id = getattr(self, "_generation_request_id", 0) + 1
+        request_id = self._generation_request_id
+        self._last_failed_phase = None
         if diagnostics is not None:
-            self._diagnostic_request_id += 1
-            request_id = self._diagnostic_request_id
+            self._diagnostic_request_id = request_id
             before = diagnostics.start(request_id, limit)
             # Keep the historical since-load high-water fields despite per-request resets.
             self.peak_gpu_memory_bytes = max(self.peak_gpu_memory_bytes,
@@ -385,20 +411,26 @@ class GptOss20BModel:
                                                before.get("peak_reserved_bytes", 0))
         input_count = None
         error_type = None
+        capture_memory = True
         try:
+            self._last_failed_phase = "input_transfer"
             inputs = self._encode_messages(messages, tensors=True).to(self.model.device)
             input_ids = inputs["input_ids"]
             input_count = int(input_ids.shape[1])
+            self._last_failed_phase = "pre_generation_synchronize"
             self.torch.cuda.synchronize(0)
             started = time.perf_counter()
+            self._last_failed_phase = "model_generate"
             with self.torch.inference_mode():
                 output = self.model.generate(
                     **inputs, do_sample=True, temperature=self.temperature,
                     top_p=self.top_p, top_k=self.top_k, max_new_tokens=limit,
                     eos_token_id=self.return_token_id,
                     pad_token_id=self.tokenizer.pad_token_id)
+            self._last_failed_phase = "post_generation_synchronize"
             self.torch.cuda.synchronize(0)
             elapsed = round(time.perf_counter() - started, 3)
+            self._last_failed_phase = "decode"
             generated_ids = output[0][input_ids.shape[1]:].tolist()
             parsed = parse_configured_completion(self.tokenizer, generated_ids, limit,
                                                  self.completion_parser)
@@ -406,6 +438,7 @@ class GptOss20BModel:
                                              int(self.torch.cuda.max_memory_allocated(0)))
             self.peak_gpu_reserved_bytes = max(self.peak_gpu_reserved_bytes,
                                                int(self.torch.cuda.max_memory_reserved(0)))
+            self._last_failed_phase = None
             return {**parsed, "input_tokens": input_count,
                     "output_tokens": len(generated_ids), "inference_seconds": elapsed,
                     "generation_prompt_tail": self.tokenizer.decode(input_ids[0][-32:].tolist(),
@@ -417,7 +450,9 @@ class GptOss20BModel:
                     "peak_gpu_memory_reserved_bytes": self.peak_gpu_reserved_bytes}
         except Exception as exc:
             error_type = type(exc).__name__
+            capture_memory = not _fatal_cuda_response(error_type, str(exc))
             raise
         finally:
             if diagnostics is not None:
-                diagnostics.finish(request_id, input_count, limit, error_type)
+                diagnostics.finish(request_id, input_count, limit, error_type,
+                                   capture_memory=capture_memory)

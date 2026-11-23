@@ -82,7 +82,8 @@ class FakeWorker:
         self.episodes = []
 
     def metadata(self):
-        return {"gpu_name": "NVIDIA L40S", "model_id": "fake"}
+        return {"gpu_name": "NVIDIA L40S", "model_id": "fake",
+                "attention_implementation": "flex_attention"}
 
     def begin_episode(self, task_id, seed):
         self.episodes.append((task_id, seed))
@@ -145,6 +146,7 @@ def test_stage_and_batch_route_policies_and_lock_metadata(monkeypatch, tmp_path)
     assert run_meta["implementation_commit"] == "test-commit"
     assert run_meta["policy_sha256"] == policy_digest("accuracy_first_v1")
     assert run_meta["model_settings"] == plan["model_settings"]
+    assert run_meta["attention_implementation"] == "flex_attention"
     assert read_json(first_run / "policy.json") == policy_configuration("accuracy_first_v1")
     snapshot = read_json(first_run / "checkpoints" / "0000.json")
     assert snapshot["decision_telemetry"][0]["policy_id"] == "accuracy_first_v1"
@@ -203,6 +205,50 @@ def test_fatal_cuda_episode_stops_batch_and_blocks_resume(monkeypatch, tmp_path)
     monkeypatch.setattr(evaluation, "checked_plan", lambda *_: plan)
     with pytest.raises(ValueError, match="Prior stopped_worker_failure"):
         evaluation.run_batch(tmp_path, "accuracy_first_v1", 0)
+
+
+def test_cuda_illegal_access_invalidates_stage_for_all_policies(monkeypatch, tmp_path):
+    monkeypatch.setattr(evaluation, "require_clean_commit", lambda: "test-commit")
+    plan = evaluation._plan(require_runtime=False)
+    for policy_id in POLICIES:
+        def fatal_episode(*args, **kwargs):
+            result = fake_episode(*args, **kwargs)
+            result["status"] = "controller_cuda_fatal"
+            result["trace"][-1]["termination_reason"] = "controller_cuda_fatal"
+            result["trace"][-1]["action"] = None
+            return result
+
+        run_dir = evaluation._run_tasks(tmp_path / "smoke" / policy_id, policy_id,
+            [0], plan, qwen_factory=lambda _config: object(), gpt_factory=FakeWorker,
+            memory_factory=lambda *_: None, episode_runner=fatal_episode)
+        assert read_json(run_dir / "run.json")["status"] == "stopped_worker_failure"
+        episode = read_json(next((run_dir / "episodes").glob("*.json")))
+        assert episode["infrastructure_invalid"] is True
+        assert episode["decision_telemetry"][0]["fatal_infrastructure_failure"] is True
+    with pytest.raises(ValueError, match="Incompatible smoke run"):
+        evaluation.stage_report(tmp_path, "smoke")
+
+
+def test_backend_mismatch_refuses_before_task_and_records_active_backend(monkeypatch, tmp_path):
+    monkeypatch.setattr(evaluation, "require_clean_commit", lambda: "test-commit")
+    plan = evaluation._plan(require_runtime=False)
+
+    class WrongBackend(FakeWorker):
+        def metadata(self):
+            return {**super().metadata(), "attention_implementation": "sdpa"}
+
+    root = tmp_path / "runs" / "original_v4" / "batch_00"
+    with pytest.raises(ValueError, match="active attention backend"):
+        evaluation._run_tasks(root, "original_v4", [0], plan,
+            qwen_factory=lambda _config: pytest.fail("task model was loaded"),
+            gpt_factory=WrongBackend, memory_factory=lambda *_: None,
+            episode_runner=lambda *_args, **_kwargs: pytest.fail("episode ran"))
+    run_dir = next(root.glob("textcraft_*"))
+    meta = read_json(run_dir / "run.json")
+    assert meta["status"] == "failed"
+    assert meta["requested_attention_implementation"] == "flex_attention"
+    assert meta["attention_implementation"] == "sdpa"
+    assert not list((run_dir / "episodes").glob("*.json"))
 
 
 def test_backend_fallback_stops_new_evaluator_without_changing_v4(monkeypatch, tmp_path):

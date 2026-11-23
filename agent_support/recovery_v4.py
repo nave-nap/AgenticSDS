@@ -14,12 +14,14 @@ from .autonomous_support import (ControllerResponse, SupportBudget, SupportConte
                                  make_support_executor, run_support_loop,
                                  visible_state_digest)
 from .benchmarks import make_episode
-from .controller_backend import ControllerWorkerOOM, ControllerWorkerUnavailable
+from .controller_backend import (ControllerWorkerFatalCUDA, ControllerWorkerOOM,
+                                 ControllerWorkerUnavailable)
 from .policy import parse_textcraft, textcraft_messages
 from .recovery_accuracy_policy import PolicyDirective, RecoveryPolicy
 
 ARMS = ("expanded_v3_v1", "autonomous_recovery_v4")
 WORKER_FAILURE_REASONS = {"cuda_oom": "controller_cuda_oom",
+                          "cuda_fatal": "controller_cuda_fatal",
                           "unavailable": "controller_worker_unavailable"}
 TERMINAL_WORKER_STATUSES = frozenset(WORKER_FAILURE_REASONS.values())
 REPAIR_VERSION = "autonomous_recovery_v4_protocol_v2"
@@ -341,14 +343,18 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
             if reason := budget.block_reason(reservation):
                 trace.termination_reason = reason
                 return trace, reason
-        except (ControllerWorkerOOM, ControllerWorkerUnavailable) as exc:
+        except (ControllerWorkerOOM, ControllerWorkerFatalCUDA, ControllerWorkerUnavailable) as exc:
             trace.events.append({"error": repr(exc), "error_detail": exc.detail,
-                                 "stage": "reservation"})
+                                 "stage": "reservation",
+                                 **({"worker_traceback": exc.worker_traceback}
+                                    if getattr(exc, "worker_traceback", None) else {})})
             trace.final_action = None
             trace.termination_reason = exc.termination_reason
             return trace, exc.termination_reason
         except Exception as exc:
-            trace.events.append({"error": repr(exc), "stage": "reservation"})
+            trace.events.append({"error": repr(exc), "stage": "reservation",
+                                 **({"worker_traceback": exc.worker_traceback}
+                                    if getattr(exc, "worker_traceback", None) else {})})
             trace.termination_reason = "controller_error"
             return trace, "controller_error"
         event = {"state": current.as_dict(), "recovery_state_before": state.snapshot(),
@@ -356,12 +362,14 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
         trace.controller_decisions += 1
         try:
             generation = model.generate(messages, max_new_tokens=reservation.output_tokens)
-        except (ControllerWorkerOOM, ControllerWorkerUnavailable) as exc:
+        except (ControllerWorkerOOM, ControllerWorkerFatalCUDA, ControllerWorkerUnavailable) as exc:
             # Generation usage is unavailable; charge the reserved input and one call.
             estimated = SupportCost(1, input_count, 0)
             budget.charge("controller", estimated, reservation)
             event.update(error=repr(exc), error_detail=exc.detail,
                          usage_estimated=True, controller_cost=estimated.as_dict())
+            if getattr(exc, "worker_traceback", None):
+                event["worker_traceback"] = exc.worker_traceback
             trace.events.append(event)
             trace.final_action = None
             trace.termination_reason = exc.termination_reason
@@ -370,6 +378,8 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
             # The attempt is visible even when backend usage cannot be recovered.
             budget.charge("controller", SupportCost(1, input_count, 0), reservation)
             event.update(error=repr(exc), usage_estimated=True)
+            if getattr(exc, "worker_traceback", None):
+                event["worker_traceback"] = exc.worker_traceback
             trace.events.append(event)
             trace.termination_reason = "controller_backend_error"
             return trace, "controller_backend_error"
@@ -449,9 +459,11 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
             request = SupportRequest(choice["operation"], choice["arguments"], choice["uncertainty"])
             try:
                 operation, operation_reservation = executor.prepare(request, current)
-            except (ControllerWorkerOOM, ControllerWorkerUnavailable) as exc:
+            except (ControllerWorkerOOM, ControllerWorkerFatalCUDA, ControllerWorkerUnavailable) as exc:
                 event.update(request=request.as_dict(), error=repr(exc),
                              error_detail=exc.detail, stage="support_reservation")
+                if getattr(exc, "worker_traceback", None):
+                    event["worker_traceback"] = exc.worker_traceback
                 trace.events.append(event)
                 trace.final_action = None
                 trace.termination_reason = exc.termination_reason
@@ -557,6 +569,8 @@ def adaptive_loop(model, executor: SupportExecutor, budget: SupportBudget,
         if worker_stop:
             event["error"] = result.metadata.get("backend_error", result.metadata.get("error"))
             event["error_detail"] = worker_failure.get("detail")
+            if worker_failure.get("worker_traceback"):
+                event["worker_traceback"] = worker_failure["worker_traceback"]
         event["recovery_state_after"] = state.snapshot()
         trace.events.append(event)
         if worker_stop:

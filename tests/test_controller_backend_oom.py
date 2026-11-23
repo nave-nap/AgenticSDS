@@ -46,7 +46,7 @@ def test_worker_reports_structured_out_of_memory_error():
                             "error": "CUDA allocation failed at layer 7"}
 
 
-def test_only_structured_out_of_memory_error_gets_dedicated_exception(monkeypatch):
+def test_cuda_out_of_memory_gets_dedicated_exception(monkeypatch):
     detail = "CUDA out of memory. Tried to allocate 2 GiB"
     worker = worker_response(monkeypatch, {"ok": False, "error_type": "OutOfMemoryError",
                                                "error": detail})
@@ -58,10 +58,67 @@ def test_only_structured_out_of_memory_error_gets_dedicated_exception(monkeypatc
 
     worker = worker_response(monkeypatch, {"ok": False, "error_type": "RuntimeError",
                                                "error": detail})
-    with pytest.raises(RuntimeError, match="RuntimeError") as ordinary:
+    with pytest.raises(controller_backend.ControllerWorkerOOM) as ordinary:
         worker._request({"op": "generate", "messages": []})
-    assert not isinstance(ordinary.value, controller_backend.ControllerWorkerOOM)
     assert detail in str(ordinary.value)
+
+
+@pytest.mark.parametrize("detail", [
+    "CUDA error: an illegal memory access was encountered",
+    "CUDA driver error: an illegal memory access was encountered",
+    "CUDA error: device-side assert triggered",
+])
+def test_fatal_cuda_worker_is_unusable_and_preserves_traceback(monkeypatch, detail):
+    worker = worker_response(monkeypatch, {"ok": False, "error_type": "AcceleratorError",
+        "error": detail, "traceback": "Traceback: model.generate failed",
+        "request_id": 7, "failed_phase": "model_generate"})
+    with pytest.raises(controller_backend.ControllerWorkerFatalCUDA) as caught:
+        worker._request({"op": "generate", "messages": []})
+    error = caught.value
+    assert error.termination_reason == "controller_cuda_fatal"
+    assert error.worker_traceback == "Traceback: model.generate failed"
+    assert controller_backend.worker_failure_marker(error)["failed_phase"] == "model_generate"
+    assert worker.unusable is True
+    with pytest.raises(controller_backend.ControllerWorkerUnavailable):
+        worker._request({"op": "generate", "messages": []})
+
+
+def test_ordinary_worker_error_preserves_traceback_without_fatal_classification(monkeypatch):
+    worker = worker_response(monkeypatch, {"ok": False, "error_type": "RuntimeError",
+        "error": "invalid JSON", "traceback": "Traceback: parser failed"})
+    with pytest.raises(RuntimeError) as caught:
+        worker._request({"op": "generate", "messages": []})
+    assert not isinstance(caught.value, controller_backend.ControllerWorkerFatalCUDA)
+    assert caught.value.worker_traceback == "Traceback: parser failed"
+    assert not getattr(worker, "unusable", False)
+
+
+def test_worker_emits_traceback_for_cuda_driver_error(monkeypatch):
+    monkeypatch.setenv("AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS", "1")
+
+    class AcceleratorError(Exception):
+        pass
+
+    class Model:
+        def __init__(self, config):
+            self._generation_request_id = 3
+            self._last_failed_phase = "model_generate"
+
+        def metadata(self):
+            return {}
+
+        def generate(self, messages, max_new_tokens=None):
+            raise AcceleratorError("CUDA driver error: an illegal memory access was encountered")
+
+    source = io.StringIO("\n".join([
+        json.dumps({"op": "init", "config": {}}),
+        json.dumps({"op": "generate", "messages": []}), ""]))
+    sink = io.StringIO()
+    serve(source=source, sink=sink, model_factory=Model)
+    failure = json.loads(sink.getvalue().splitlines()[1])
+    assert failure["request_id"] == 3
+    assert failure["failed_phase"] == "model_generate"
+    assert "raise AcceleratorError" in failure["traceback"]
 
 
 @pytest.mark.parametrize("failure", ["closed", "exited", "closed_stream", "eof", "broken_pipe"])

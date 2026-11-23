@@ -9,7 +9,8 @@ from agent_support.autonomous_support import (ControllerResponse, SupportBudget,
     SupportContext, SupportDecision, SupportExecutor, SupportRequest,
     SupportReservation, make_support_controller, run_support_loop)
 from agent_support.autonomous_operations import ReasonOverArtifacts
-from agent_support.controller_backend import ControllerWorkerOOM, ControllerWorkerUnavailable
+from agent_support.controller_backend import (ControllerWorkerFatalCUDA, ControllerWorkerOOM,
+    ControllerWorkerUnavailable)
 from agent_support.policy import parse_textcraft
 from agent_support.recovery_v4 import (AnalyzeFailures, RecoveryState, VerifyPrerequisites,
     SYSTEM, adaptive_loop, parse_decision, recovery_executor, run_recovery_episode)
@@ -497,6 +498,25 @@ def test_controller_cuda_oom_after_prior_action_stops_further_steps():
     assert result["qwen_model_calls"] == result["controller_model_calls"] == 2
     assert result["trace"][1]["action"] is None
     assert result["trace"][1]["support_trace"]["events"][0]["usage_estimated"] is True
+
+
+def test_original_v4_fatal_cuda_stops_without_environment_action_or_parser_fallback():
+    error = ControllerWorkerFatalCUDA("AcceleratorError",
+        "CUDA driver error: an illegal memory access was encountered",
+        worker_traceback="Traceback: model.generate", request_id=4,
+        failed_phase="model_generate")
+    gpt = ErrorGpt([error])
+    config = config_for("autonomous_recovery_v4")
+    config["autonomous_support"]["operations"] = []
+    episode = Episode()
+    result = run_recovery_episode({"task_id": "dev", "initial_observation": episode.initial_observation},
+        config, Qwen(), gpt, episode_factory=lambda *_: episode)
+    assert result["status"] == "controller_cuda_fatal"
+    assert result["environment_actions"] == 0 and episode.steps == []
+    assert result["controller_fallbacks"] == 0
+    record = result["trace"][0]
+    assert record["action"] is None
+    assert record["support_trace"]["events"][0]["worker_traceback"] == "Traceback: model.generate"
 
 
 def test_worker_oom_during_reservation_terminates_without_model_charge():

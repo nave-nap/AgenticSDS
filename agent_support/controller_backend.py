@@ -18,9 +18,29 @@ class ControllerWorkerOOM(RuntimeError):
     failure_kind = "cuda_oom"
     termination_reason = "controller_cuda_oom"
 
-    def __init__(self, detail: str):
+    def __init__(self, detail: str, worker_traceback: str | None = None,
+                 request_id: int | None = None, failed_phase: str | None = None):
         self.detail = detail
+        self.worker_traceback = worker_traceback
+        self.request_id = request_id
+        self.failed_phase = failed_phase
         super().__init__(f"GPT-OSS controller worker OutOfMemoryError: {detail}")
+
+
+class ControllerWorkerFatalCUDA(RuntimeError):
+    """A worker error indicating a poisoned CUDA context."""
+
+    failure_kind = "cuda_fatal"
+    termination_reason = "controller_cuda_fatal"
+
+    def __init__(self, error_type: str, detail: str, worker_traceback: str | None = None,
+                 request_id: int | None = None, failed_phase: str | None = None):
+        self.error_type = error_type
+        self.detail = detail
+        self.worker_traceback = worker_traceback
+        self.request_id = request_id
+        self.failed_phase = failed_phase
+        super().__init__(f"GPT-OSS controller worker {error_type}: {detail}")
 
 
 class ControllerWorkerUnavailable(RuntimeError):
@@ -34,8 +54,29 @@ class ControllerWorkerUnavailable(RuntimeError):
         super().__init__(f"GPT-OSS controller worker unavailable: {detail}")
 
 
-def worker_failure_marker(exc: ControllerWorkerOOM | ControllerWorkerUnavailable) -> dict:
-    return {"kind": exc.failure_kind, "detail": exc.detail}
+def worker_failure_marker(exc: ControllerWorkerOOM | ControllerWorkerFatalCUDA |
+                          ControllerWorkerUnavailable) -> dict:
+    marker = {"kind": exc.failure_kind, "detail": exc.detail}
+    for key in ("error_type", "request_id", "failed_phase", "worker_traceback"):
+        value = getattr(exc, key, None)
+        if value is not None:
+            marker[key] = value
+    return marker
+
+
+def _fatal_cuda_response(error_type: str, detail: str) -> bool:
+    if error_type not in {"AcceleratorError", "RuntimeError"}:
+        return False
+    return bool(re.search(
+        r"(?:^|\n)CUDA (?:driver )?error: (?:an illegal memory access was encountered|"
+        r"device-side assert triggered|an illegal instruction was encountered|"
+        r"unspecified launch failure)(?:\b|$)", detail, re.IGNORECASE))
+
+
+def _oom_response(error_type: str, detail: str) -> bool:
+    return error_type == "OutOfMemoryError" or (
+        error_type in {"RuntimeError", "AcceleratorError"} and
+        bool(re.search(r"CUDA (?:out of memory|error: out of memory)", detail, re.IGNORECASE)))
 
 
 class GptOssControllerWorker:
@@ -114,9 +155,22 @@ class GptOssControllerWorker:
             raise ControllerWorkerUnavailable("worker closed its protocol stream")
         result = json.loads(line)
         if not result.get("ok"):
-            if result.get("error_type") == "OutOfMemoryError":
-                raise ControllerWorkerOOM(result.get("error"))
-            raise RuntimeError(f"GPT-OSS controller worker {result.get('error_type')}: {result.get('error')}")
+            error_type, detail = result.get("error_type"), result.get("error")
+            if isinstance(error_type, str) and isinstance(detail, str):
+                if _oom_response(error_type, detail):
+                    self.unusable = True
+                    raise ControllerWorkerOOM(detail, result.get("traceback"),
+                                              result.get("request_id"), result.get("failed_phase"))
+                if _fatal_cuda_response(error_type, detail):
+                    self.unusable = True
+                    raise ControllerWorkerFatalCUDA(
+                        error_type, detail, result.get("traceback"),
+                        result.get("request_id"), result.get("failed_phase"))
+            error = RuntimeError(f"GPT-OSS controller worker {error_type}: {detail}")
+            error.worker_traceback = result.get("traceback")
+            error.request_id = result.get("request_id")
+            error.failed_phase = result.get("failed_phase")
+            raise error
         return result
 
     def metadata(self) -> dict:
