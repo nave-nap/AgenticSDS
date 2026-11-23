@@ -6,6 +6,7 @@ import io
 import json
 import hashlib
 import os
+from collections import UserDict
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,7 @@ import pytest
 from agent_support import gpt_oss_attention_probe as probe
 from agent_support.gpt_oss_model import GptOss20BModel
 from agent_support.gpt_oss_controller_worker import serve
+from agent_support.input_token_fingerprint import input_ids_sha256, single_input_token_ids
 
 
 def fixture():
@@ -46,27 +48,53 @@ def test_fixture_rejects_changed_generation_settings():
         probe.validate_fixture(value, 1024)
 
 
-def test_synthetic_fixture_has_deterministic_long_token_sequence(monkeypatch):
+@pytest.mark.parametrize("target", [512, 7555])
+def test_synthetic_fixture_extracts_batch_encoding_and_matches_worker_hash(monkeypatch, target):
+    class FakeTensor:
+        def __init__(self, values):
+            self.values = values
+        def tolist(self):
+            return [self.values]
+    class BatchEncoding(UserDict):
+        pass
     class Tokenizer:
-        def apply_chat_template(self, messages, **_kwargs):
-            return list(range(len(messages[1]["content"]) // 4))
-    monkeypatch.setattr(probe, "_pinned_tokenizer", lambda _config: (Tokenizer(), "template"))
+        def apply_chat_template(self, messages, **kwargs):
+            assert kwargs["return_tensors"] == "pt" and kwargs["return_dict"] is True
+            ids = list(range(len(messages[1]["content"]) // 4))
+            return BatchEncoding(input_ids=FakeTensor(ids), attention_mask=FakeTensor([1] * len(ids)))
+    tokenizer = Tokenizer()
+    monkeypatch.setattr(probe, "_pinned_tokenizer", lambda _config: (tokenizer, "template"))
     config = probe.config_for_probe()
-    first = probe.synthetic_fixture(config, 7555)
-    second = probe.synthetic_fixture(config, 7555)
+    first = probe.synthetic_fixture(config, target)
+    second = probe.synthetic_fixture(config, target)
     assert first == second
-    assert 7000 <= first["expected_input_tokens"] <= 8000
+    assert first["expected_input_tokens"] == target
     assert first["source"]["kind"] == "synthetic"
+    model = object.__new__(GptOss20BModel)
+    model._encode_messages = lambda messages, tensors: tokenizer.apply_chat_template(
+        messages, return_tensors="pt", return_dict=True)
+    model.model = SimpleNamespace(config=SimpleNamespace(_attn_implementation="eager"))
+    assert model.probe_input(first["messages"])["input_ids_sha256"] == first[
+        "expected_input_ids_sha256"]
 
 
 def test_model_probe_fingerprints_exact_ids_without_generation():
     model = object.__new__(GptOss20BModel)
-    model._encode_messages = lambda _messages, tensors=False: [2, 7, 11]
+    model._encode_messages = lambda _messages, tensors: UserDict(input_ids=[[2, 7, 11]])
     model.model = SimpleNamespace(config=SimpleNamespace(_attn_implementation="flex_attention"))
     result = model.probe_input(fixture()["messages"])
     assert result["input_tokens"] == 3
     assert result["input_ids_sha256"] == hashlib.sha256(b"[2,7,11]").hexdigest()
     assert result["attention_implementation"] == "flex_attention"
+
+
+def test_single_prompt_ids_reject_batch_flattening_and_bad_tokens():
+    assert single_input_token_ids(UserDict(input_ids=[[3, 1, 4]])) == [3, 1, 4]
+    assert input_ids_sha256([3, 1, 4]) == hashlib.sha256(b"[3,1,4]").hexdigest()
+    with pytest.raises(ValueError, match="exactly one sequence"):
+        single_input_token_ids(UserDict(input_ids=[[3, 1], [4, 1]]))
+    with pytest.raises(ValueError, match="nonnegative integer"):
+        single_input_token_ids(UserDict(input_ids=[[3, True, 4]]))
 
 
 def test_worker_probe_op_returns_token_fingerprint_without_generation():

@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .common import read_json, write_json_atomic
 from .gpu_memory_diagnostics import CACHE_RELEASE_ENV, DIRECTORY_ENV, ENABLE_ENV
+from .input_token_fingerprint import input_ids_sha256, single_input_token_ids
 
 SCHEMA_VERSION = 1
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs/autonomous_recovery_v4/autonomous_recovery_v4.json"
@@ -124,9 +125,10 @@ def _pinned_tokenizer(config: dict):
 
 
 def _token_ids(tokenizer, template: str, config: dict, messages: list[dict]) -> list[int]:
-    return tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True,
+    encoded = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True,
         reasoning_effort=config["autonomous_support"]["model"]["model"]["reasoning_effort"],
-        chat_template=template)
+        chat_template=template, return_tensors="pt", return_dict=True)
+    return single_input_token_ids(encoded)
 
 
 def synthetic_fixture(config: dict, target_tokens: int) -> dict:
@@ -134,11 +136,11 @@ def synthetic_fixture(config: dict, target_tokens: int) -> dict:
         raise ValueError("Synthetic target must be between 128 and 16000 tokens")
     tokenizer, template = _pinned_tokenizer(config)
     line = "Visible recipe: craft 1 oak planks using 1 oak log. Prior action: get 1 oak log. Feedback: Got 1 oak log.\n"
-    def material(repeats):
+    def material(repeats, suffix=""):
         return [{"role": "system", "content": SYNTHETIC_SYSTEM},
                 {"role": "user", "content": json.dumps({"benchmark": "textcraft",
                     "observation": "Synthetic memory-stress fixture; no environment state is implied.",
-                    "visible_history": line * repeats, "current_action": "inventory"},
+                    "visible_history": line * repeats + suffix, "current_action": "inventory"},
                     separators=(",", ":"))}]
     low, high = 0, target_tokens
     while low < high:
@@ -148,18 +150,42 @@ def synthetic_fixture(config: dict, target_tokens: int) -> dict:
             low = mid + 1
         else:
             high = mid
-    candidates = [material(max(0, low - 1)), material(low)]
-    messages = min(candidates, key=lambda item: abs(len(_token_ids(
-        tokenizer, template, config, item)) - target_tokens))
+    repeats = max(0, low - 1)
+    messages = None
+    # Ordinary text padding fills the gap left by whole recipe lines. Check
+    # actual token IDs at every step; BPE length need not equal character count.
+    for unit in (" x", " a", "\n"):
+        def candidate(padding):
+            return material(repeats, unit * padding)
+        start, end = 0, max(1, target_tokens - len(_token_ids(
+            tokenizer, template, config, candidate(0))))
+        while len(_token_ids(tokenizer, template, config, candidate(end))) < target_tokens:
+            end *= 2
+        while start < end:
+            mid = (start + end) // 2
+            if len(_token_ids(tokenizer, template, config, candidate(mid))) < target_tokens:
+                start = mid + 1
+            else:
+                end = mid
+        for padding in range(max(0, start - 8), start + 9):
+            trial = candidate(padding)
+            if len(_token_ids(tokenizer, template, config, trial)) == target_tokens:
+                messages = trial
+                break
+        if messages is not None:
+            break
+    if messages is None:
+        raise RuntimeError(f"Could not construct exactly {target_tokens} input tokens")
     ids = _token_ids(tokenizer, template, config, messages)
+    if len(ids) != target_tokens:
+        raise RuntimeError("Synthetic fixture token count changed")
     return validate_fixture({"schema_version": SCHEMA_VERSION,
         "source": {"kind": "synthetic", "target_input_tokens": target_tokens},
         "task_id": "textcraft:synthetic:attention_probe", "seed": config["seed"],
         "messages": messages,
         "max_new_tokens": config["autonomous_support"]["model"]["model"]["max_new_tokens"],
         "expected_input_tokens": len(ids),
-        "expected_input_ids_sha256": hashlib.sha256(json.dumps(
-            ids, separators=(",", ":")).encode()).hexdigest()},
+        "expected_input_ids_sha256": input_ids_sha256(ids)},
         config["autonomous_support"]["model"]["model"]["max_new_tokens"])
 
 

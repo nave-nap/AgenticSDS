@@ -201,6 +201,14 @@ backend, exact input fingerprint, generation outcome, model inference and IPC
 latency, and start/end/peak GPU memory. An OOM is recorded as an outcome;
 the harness does not retry it.
 
+The pinned Transformers 5.22.2 tokenizer returns a `BatchEncoding` by default.
+Fixture preparation and the worker probe now both tokenize with
+`return_tensors="pt", return_dict=True`, extract exactly one full `input_ids`
+row, and hash its compact JSON integer array. They reject multiple rows or
+invalid IDs. Synthetic preparation verifies an exact 512- or 7,555-token
+target before writing the fixture; it never hashes the `BatchEncoding`
+container or infers length from its number of keys.
+
 Only CUDA telemetry JSONL was transferred to this Mac; those files contain
 token counts but **not** the controller messages. Exact request replay is
 possible if the Locust episode JSON retains `support_trace.events[*].controller_messages`

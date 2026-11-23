@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import importlib.metadata
 import hashlib
-import json
 import os
 import random
 import re
@@ -17,6 +16,7 @@ import time
 from packaging.version import Version
 
 from .gpu_memory_diagnostics import DIRECTORY_ENV, GpuMemoryDiagnostics, enabled
+from .input_token_fingerprint import input_ids_sha256, single_input_token_ids
 
 FLEX_ATTENTION_ENV = "AGENT_SUPPORT_GPTOSS_FLEX_ATTENTION"
 
@@ -381,9 +381,8 @@ class GptOss20BModel:
 
     def probe_input(self, messages: list[dict]) -> dict:
         """Fingerprint the exact token sequence for an explicit probe request."""
-        ids = self._encode_messages(messages, tensors=False)
-        return {"input_tokens": len(ids), "input_ids_sha256": hashlib.sha256(
-            json.dumps(ids, separators=(",", ":")).encode()).hexdigest(),
+        ids = single_input_token_ids(self._encode_messages(messages, tensors=True))
+        return {"input_tokens": len(ids), "input_ids_sha256": input_ids_sha256(ids),
             "attention_implementation": self.model.config._attn_implementation}
 
     def release_cuda_cache(self) -> None:
