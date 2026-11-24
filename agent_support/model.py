@@ -30,8 +30,12 @@ class QwenModel:
             bnb_4bit_compute_dtype=torch.float16,
             bnb_4bit_use_double_quant=True,
         )
+        qwen_gpu = os.environ.get("AGENT_SUPPORT_QWEN_GPU")
+        if qwen_gpu not in (None, "0"):
+            raise ValueError("AGENT_SUPPORT_QWEN_GPU must be 0 when set")
         self.model = AutoModelForCausalLM.from_pretrained(
-            config["model_id"], device_map="auto", quantization_config=quantization, **revision
+            config["model_id"], device_map={"": 0} if qwen_gpu == "0" else "auto",
+            quantization_config=quantization, **revision
         )
         self.model.eval()
         self.memory_diagnostics = None

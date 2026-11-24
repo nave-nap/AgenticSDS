@@ -356,6 +356,11 @@ class GptOss20BModel:
                              "top_p": self.top_p, "top_k": self.top_k,
                              "max_new_tokens": self.max_new_tokens},
                 "gpu_name": self.torch.cuda.get_device_name(0),
+                "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+                "cuda_device_count": self.torch.cuda.device_count(),
+                "model_device": str(self.model.device),
+                "hf_device_map": {str(key): str(value) for key, value in
+                                  getattr(self.model, "hf_device_map", {}).items()},
                 "gpu_compute_capability": list(self.torch.cuda.get_device_capability(0)),
                 "gpu_total_memory_bytes": self.torch.cuda.get_device_properties(0).total_memory,
                 "torch_version": self.torch.__version__,

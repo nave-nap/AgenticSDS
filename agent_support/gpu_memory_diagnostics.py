@@ -60,7 +60,9 @@ class GpuMemoryDiagnostics:
             return
         try:
             event = {"timestamp_utc": datetime.now(timezone.utc).isoformat(),
-                     "pid": os.getpid(), **values}
+                     "pid": os.getpid(),
+                     "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+                     "logical_cuda_device": 0, **values}
             with self.path.open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(event, ensure_ascii=False) + "\n")
         except Exception:

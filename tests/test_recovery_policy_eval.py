@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +13,14 @@ from agent_support.recovery_accuracy_policy import (AccuracyFirstPolicy,
 from agent_support.recovery_policy_registry import (POLICIES, make_policy,
                                                     policy_configuration, policy_digest)
 from agent_support.recovery_policy_telemetry import decision_telemetry
+
+
+@pytest.fixture(autouse=True)
+def two_gpu_environment(monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+    monkeypatch.setenv("AGENT_SUPPORT_QWEN_GPU", "0")
+    monkeypatch.setenv("AGENT_SUPPORT_GPTOSS_WORKER_GPU", "1")
+    monkeypatch.setenv("SLURM_JOB_ID", "test-allocation")
 
 
 def test_registry_routes_distinct_policies_and_preserves_frozen_config():
@@ -88,13 +97,24 @@ class FakeWorker:
 
     def metadata(self):
         return {"gpu_name": "NVIDIA L40S", "model_id": "fake",
-                "attention_implementation": "eager"}
+                "attention_implementation": "eager", "cuda_visible_devices": "1",
+                "cuda_device_count": 1, "model_device": "cuda:0",
+                "hf_device_map": {"": "0"}}
 
     def begin_episode(self, task_id, seed):
         self.episodes.append((task_id, seed))
 
     def close(self):
         pass
+
+
+class FakeQwen:
+    def __init__(self, _config):
+        self.torch = SimpleNamespace(cuda=SimpleNamespace(
+            device_count=lambda: 2,
+            get_device_name=lambda _index: "NVIDIA L40S"))
+        self.model = SimpleNamespace(hf_device_map={"": 0},
+            parameters=lambda: [SimpleNamespace(device="cuda:0")])
 
 
 def fake_episode(task, config, qwen, gpt, *, memory, checkpoint, policy):
@@ -125,7 +145,7 @@ def test_stage_and_batch_route_policies_and_lock_metadata(monkeypatch, tmp_path)
 
     def fake_run(root, policy_id, indices, selected_plan):
         return evaluation._run_tasks(root, policy_id, indices, selected_plan,
-            qwen_factory=lambda _config: object(), gpt_factory=FakeWorker,
+            qwen_factory=FakeQwen, gpt_factory=FakeWorker,
             memory_factory=lambda *_: None, episode_runner=recording_episode)
 
     for stage in evaluation.STAGES:
@@ -153,6 +173,7 @@ def test_stage_and_batch_route_policies_and_lock_metadata(monkeypatch, tmp_path)
     assert run_meta["policy_sha256"] == policy_digest("accuracy_first_terminal_v1")
     assert run_meta["model_settings"] == plan["model_settings"]
     assert run_meta["attention_implementation"] == "eager"
+    assert evaluation.valid_gpu_placement(run_meta["gpu_placement"])
     assert run_meta["runtime_feature_checks"] == plan["runtime_feature_checks"]
     assert read_json(first_run / "policy.json") == policy_configuration("accuracy_first_terminal_v1")
     snapshot = read_json(first_run / "checkpoints" / "0000.json")
@@ -205,7 +226,7 @@ def test_fatal_cuda_episode_stops_batch_and_blocks_resume(monkeypatch, tmp_path)
 
     directory = tmp_path / "runs" / "accuracy_first_terminal_v1" / "batch_00"
     run_dir = evaluation._run_tasks(directory, "accuracy_first_terminal_v1", [0, 1, 2], plan,
-        qwen_factory=lambda _config: object(), gpt_factory=FakeWorker,
+        qwen_factory=FakeQwen, gpt_factory=FakeWorker,
         memory_factory=lambda *_: None, episode_runner=fatal_episode)
     assert len(executed) == 1
     assert read_json(run_dir / "run.json")["status"] == "stopped_worker_failure"
@@ -228,7 +249,7 @@ def test_cuda_illegal_access_invalidates_stage_for_all_policies(monkeypatch, tmp
             return result
 
         run_dir = evaluation._run_tasks(tmp_path / "smoke" / policy_id, policy_id,
-            [0], plan, qwen_factory=lambda _config: object(), gpt_factory=FakeWorker,
+            [0], plan, qwen_factory=FakeQwen, gpt_factory=FakeWorker,
             memory_factory=lambda *_: None, episode_runner=fatal_episode)
         assert read_json(run_dir / "run.json")["status"] == "stopped_worker_failure"
         episode = read_json(next((run_dir / "episodes").glob("*.json")))
@@ -282,6 +303,40 @@ def test_eager_runtime_preflight_requires_explicit_flags(monkeypatch):
     monkeypatch.setenv("AGENT_SUPPORT_GPTOSS_CUDA_CACHE_RELEASE", "1")
     assert not evaluation.preflight("original_v4")["runtime_feature_checks"][
         "cuda_cache_release_disabled"]
+    monkeypatch.setenv("AGENT_SUPPORT_GPTOSS_CUDA_CACHE_RELEASE", "0")
+    monkeypatch.setenv("AGENT_SUPPORT_GPTOSS_WORKER_GPU", "0")
+    assert not evaluation.preflight("original_v4")["runtime_feature_checks"][
+        "gptoss_worker_pinned_to_gpu_one"]
+
+
+def test_wrong_gpu_placement_stops_before_task(monkeypatch, tmp_path):
+    monkeypatch.setattr(evaluation, "require_clean_commit", lambda: "test-commit")
+    plan = evaluation._plan(require_runtime=False)
+
+    class WrongWorker(FakeWorker):
+        def metadata(self):
+            return {**super().metadata(), "cuda_visible_devices": "0"}
+
+    root = tmp_path / "worker"
+    with pytest.raises(ValueError, match="GPT-OSS is not isolated"):
+        evaluation._run_tasks(root, "original_v4", [0], plan,
+            qwen_factory=lambda _config: pytest.fail("Qwen loaded"),
+            gpt_factory=WrongWorker, memory_factory=lambda *_: None,
+            episode_runner=lambda *_args, **_kwargs: pytest.fail("episode ran"))
+    assert read_json(next(root.glob("textcraft_*")) / "run.json")["status"] == "failed"
+
+    class SpilledQwen(FakeQwen):
+        def __init__(self, config):
+            super().__init__(config)
+            self.model.hf_device_map = {"": 1}
+
+    root = tmp_path / "qwen"
+    with pytest.raises(ValueError, match="Qwen is not confined"):
+        evaluation._run_tasks(root, "original_v4", [0], plan,
+            qwen_factory=SpilledQwen, gpt_factory=FakeWorker,
+            memory_factory=lambda *_: None,
+            episode_runner=lambda *_args, **_kwargs: pytest.fail("episode ran"))
+    assert read_json(next(root.glob("textcraft_*")) / "run.json")["status"] == "failed"
 
 
 def test_terminal_runtime_gate_checks_episode_and_memory(monkeypatch, tmp_path):
@@ -296,14 +351,16 @@ def test_terminal_runtime_gate_checks_episode_and_memory(monkeypatch, tmp_path):
 
     run_dir = evaluation._run_tasks(
         tmp_path / "smoke" / "accuracy_first_terminal_v1",
-        "accuracy_first_terminal_v1", [0], plan, qwen_factory=lambda _config: object(),
+        "accuracy_first_terminal_v1", [0], plan, qwen_factory=FakeQwen,
         gpt_factory=FakeWorker, memory_factory=lambda *_: None,
         episode_runner=reviewed_episode)
     diagnostics = run_dir / "diagnostics"
     diagnostics.mkdir()
     for label in ("gpt_oss_cuda_memory", "qwen_cuda_memory"):
         (diagnostics / f"{label}_synthetic.jsonl").write_text(
-            json.dumps({"memory": {"peak_reserved_bytes": 35_000_000_000,
+            json.dumps({"cuda_visible_devices": "1" if label.startswith("gpt_oss") else "0,1",
+                        "logical_cuda_device": 0,
+                        "memory": {"peak_reserved_bytes": 35_000_000_000,
                                    "global_free_bytes": 8_000_000_000}}) + "\n")
     gate = evaluation.runtime_gate(tmp_path)
     assert gate["ready"] and gate["terminal_review_observed"]
@@ -321,6 +378,18 @@ def test_nonterminal_smoke_requires_valid_terminal_runtime_gate(monkeypatch, tmp
         evaluation.run_stage(tmp_path, "original_v4", "smoke")
 
 
+def test_stage_returns_error_after_fatal_worker_status(monkeypatch, tmp_path):
+    from agent_support.common import write_json_atomic
+
+    run_dir = tmp_path / "finished_run"
+    run_dir.mkdir()
+    write_json_atomic(run_dir / "run.json", {"status": "stopped_worker_failure"})
+    monkeypatch.setattr(evaluation, "_plan", lambda require_runtime: {})
+    monkeypatch.setattr(evaluation, "_run_tasks", lambda *_args: run_dir)
+    with pytest.raises(RuntimeError, match="Infrastructure-invalid smoke run"):
+        evaluation.run_stage(tmp_path, "accuracy_first_terminal_v1", "smoke")
+
+
 def test_backend_fallback_stops_new_evaluator_without_changing_v4(monkeypatch, tmp_path):
     monkeypatch.setattr(evaluation, "require_clean_commit", lambda: "test-commit")
     plan = evaluation._plan(require_runtime=False)
@@ -334,7 +403,7 @@ def test_backend_fallback_stops_new_evaluator_without_changing_v4(monkeypatch, t
 
     run_dir = evaluation._run_tasks(
         tmp_path / "runs" / "original_v4" / "batch_00", "original_v4", [0, 1, 2], plan,
-        qwen_factory=lambda _config: object(), gpt_factory=FakeWorker,
+        qwen_factory=FakeQwen, gpt_factory=FakeWorker,
         memory_factory=lambda *_: None, episode_runner=backend_episode)
     assert len(executed) == 1
     assert read_json(run_dir / "run.json")["status"] == "stopped_infrastructure_failure"

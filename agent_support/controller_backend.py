@@ -88,6 +88,11 @@ class GptOssControllerWorker:
         if not python or not Path(python).is_file():
             raise ValueError(f"Set {variable} to the pinned GPT-OSS Python executable")
         environment = os.environ.copy()
+        worker_gpu = os.environ.get("AGENT_SUPPORT_GPTOSS_WORKER_GPU")
+        if worker_gpu is not None:
+            if worker_gpu not in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(","):
+                raise ValueError("GPT-OSS worker GPU is outside the visible allocation")
+            environment["CUDA_VISIBLE_DEVICES"] = worker_gpu
         hf_variable = spec.get("hf_home_env")
         if hf_variable:
             if not re.fullmatch(r"[A-Z][A-Z0-9_]*", hf_variable) or not os.environ.get(hf_variable):

@@ -26,13 +26,15 @@ from .recovery_v4_eval import (MANIFEST_SHA256, RECIPE_SHA256, config_for,
                                preflight as v4_preflight)
 from .runner import package_versions
 
-PROTOCOL = "textcraft_recovery_policy30_eager_terminal_review_v1"
+PROTOCOL = "textcraft_recovery_policy30_eager_two_gpu_v1"
 BASE_ARM = "autonomous_recovery_v4"
 REQUESTED_ATTENTION = "eager"
 TRACEBACK_ENV = "AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS"
 MEMORY_DIAGNOSTICS_ENV = "AGENT_SUPPORT_GPU_MEMORY_DIAGNOSTICS"
 CACHE_RELEASE_ENV = "AGENT_SUPPORT_GPTOSS_CUDA_CACHE_RELEASE"
 TERMINAL_POLICY = "accuracy_first_terminal_v1"
+GPU_PLACEMENT = {"allocation_visible_devices": "0,1", "qwen_gpu": "0",
+                 "gptoss_worker_gpu": "1"}
 BATCH_SIZE = 3
 TASK_COUNT = 30
 STAGES = {"smoke": (0,), "pilot": (0, 1, 2)}
@@ -55,7 +57,12 @@ def preflight(policy_id: str) -> dict:
             "worker_tracebacks_enabled": os.environ.get(TRACEBACK_ENV) == "1",
             "gpu_memory_diagnostics_enabled": os.environ.get(MEMORY_DIAGNOSTICS_ENV) == "1",
             "cuda_cache_release_disabled": os.environ.get(CACHE_RELEASE_ENV) == "0",
-            "cuda_launch_blocking_enabled": os.environ.get("CUDA_LAUNCH_BLOCKING") == "1"},
+            "cuda_launch_blocking_enabled": os.environ.get("CUDA_LAUNCH_BLOCKING") == "1",
+            "two_visible_gpus": os.environ.get("CUDA_VISIBLE_DEVICES") == "0,1",
+            "qwen_pinned_to_gpu_zero": os.environ.get("AGENT_SUPPORT_QWEN_GPU") == "0",
+            "gptoss_worker_pinned_to_gpu_one":
+                os.environ.get("AGENT_SUPPORT_GPTOSS_WORKER_GPU") == "1",
+            "inside_slurm_allocation": bool(os.environ.get("SLURM_JOB_ID"))},
         "model_settings": {"qwen": {key: config[key] for key in
             ("model_id", "model_revision", "quantization", "max_new_tokens", "seed")},
             "gpt_oss": config["autonomous_support"]["model"],
@@ -86,6 +93,7 @@ def _plan(require_runtime: bool) -> dict:
     return {"schema_version": 1, "protocol": PROTOCOL,
         "implementation_commit": commit, "base_arm": BASE_ARM,
         "requested_attention_implementation": REQUESTED_ATTENTION,
+        "gpu_placement_request": GPU_PLACEMENT,
         "worker_tracebacks_enabled": True,
         "runtime_feature_checks": base["runtime_feature_checks"],
         "base_config_sha256": base["base_config_sha256"],
@@ -119,6 +127,59 @@ def checked_plan(root: str | Path) -> dict:
     return saved
 
 
+def verify_gptoss_placement(metadata: dict) -> dict:
+    """The worker sees only allocation GPU 1, mapped locally to cuda:0."""
+    placement = {key: metadata.get(key) for key in
+        ("cuda_visible_devices", "cuda_device_count", "gpu_name",
+         "model_device", "hf_device_map")}
+    if (placement["cuda_visible_devices"] != GPU_PLACEMENT["gptoss_worker_gpu"] or
+            placement["cuda_device_count"] != 1 or
+            placement["gpu_name"] != "NVIDIA L40S" or
+            placement["model_device"] != "cuda:0" or
+            not placement["hf_device_map"] or
+            set(placement["hf_device_map"].values()) != {"0"}):
+        raise ValueError(f"GPT-OSS is not isolated on allocation GPU 1: {placement}")
+    return placement
+
+
+def verify_qwen_placement(qwen) -> dict:
+    """Reject Qwen CPU offload or spill to the GPT-OSS GPU before a task starts."""
+    cuda = qwen.torch.cuda
+    device_map = {str(key): str(value) for key, value in
+                  getattr(qwen.model, "hf_device_map", {}).items()}
+    parameter_devices = sorted({str(parameter.device)
+                                for parameter in qwen.model.parameters()})
+    placement = {"cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        "cuda_device_count": cuda.device_count(),
+        "gpu_names": [cuda.get_device_name(i) for i in range(cuda.device_count())],
+        "hf_device_map": device_map, "parameter_devices": parameter_devices}
+    if (placement["cuda_visible_devices"] != GPU_PLACEMENT["allocation_visible_devices"] or
+            placement["cuda_device_count"] != 2 or
+            placement["gpu_names"] != ["NVIDIA L40S", "NVIDIA L40S"] or
+            not device_map or set(device_map.values()) != {"0"} or
+            parameter_devices != ["cuda:0"]):
+        raise ValueError(f"Qwen is not confined to allocation GPU 0: {placement}")
+    return placement
+
+
+def valid_gpu_placement(value: dict | None) -> bool:
+    if not isinstance(value, dict):
+        return False
+    gpt, qwen = value.get("gptoss", {}), value.get("qwen", {})
+    return (gpt.get("cuda_visible_devices") == "1" and
+            gpt.get("cuda_device_count") == 1 and
+            gpt.get("gpu_name") == "NVIDIA L40S" and
+            gpt.get("model_device") == "cuda:0" and
+            gpt.get("hf_device_map") and
+            set(gpt["hf_device_map"].values()) == {"0"} and
+            qwen.get("cuda_visible_devices") == "0,1" and
+            qwen.get("cuda_device_count") == 2 and
+            qwen.get("gpu_names") == ["NVIDIA L40S", "NVIDIA L40S"] and
+            qwen.get("hf_device_map") and
+            set(qwen["hf_device_map"].values()) == {"0"} and
+            qwen.get("parameter_devices") == ["cuda:0"])
+
+
 def _run_tasks(root: Path, policy_id: str, indices: list[int], plan: dict,
                *, qwen_factory=QwenModel, gpt_factory=GptOssControllerWorker,
                memory_factory=load_memory, episode_runner=run_recovery_episode) -> Path:
@@ -141,6 +202,7 @@ def _run_tasks(root: Path, policy_id: str, indices: list[int], plan: dict,
         "policy_configuration": policy_configuration(policy_id),
         "implementation_commit": plan["implementation_commit"],
         "requested_attention_implementation": plan["requested_attention_implementation"],
+        "gpu_placement_request": plan["gpu_placement_request"],
         "worker_tracebacks_enabled": plan["worker_tracebacks_enabled"],
         "runtime_feature_checks": plan["runtime_feature_checks"],
         "base_arm": BASE_ARM, "base_config_sha256": plan["base_config_sha256"],
@@ -160,8 +222,11 @@ def _run_tasks(root: Path, policy_id: str, indices: list[int], plan: dict,
             raise ValueError("Recovery policy evaluation requires an L40S")
         if meta["attention_implementation"] != plan["requested_attention_implementation"]:
             raise ValueError("GPT-OSS active attention backend differs from requested backend")
+        meta["gpu_placement"] = {"gptoss": verify_gptoss_placement(meta["gptoss_metadata"])}
         write_json_atomic(run_dir / "run.json", meta)
         qwen = qwen_factory(config)
+        meta["gpu_placement"]["qwen"] = verify_qwen_placement(qwen)
+        write_json_atomic(run_dir / "run.json", meta)
         if gpu_memory_diagnostics_enabled():
             configure = getattr(qwen, "enable_gpu_memory_diagnostics", None)
             if callable(configure):
@@ -224,7 +289,10 @@ def run_stage(root: str | Path, policy_id: str, stage: str) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     if list(directory.glob("textcraft_*")):
         raise FileExistsError(f"Stage already has a run for {policy_id}: {directory}")
-    return _run_tasks(directory, policy_id, list(STAGES[stage]), plan)
+    path = _run_tasks(directory, policy_id, list(STAGES[stage]), plan)
+    if read_json(path / "run.json")["status"] != "complete":
+        raise RuntimeError(f"Infrastructure-invalid {stage} run: {path}")
+    return path
 
 
 def stage_report(root: str | Path, stage: str,
@@ -248,6 +316,8 @@ def stage_report(root: str | Path, stage: str,
                 meta.get("attention_implementation") != REQUESTED_ATTENTION or
                 meta.get("gptoss_metadata", {}).get("attention_implementation") != REQUESTED_ATTENTION or
                 meta.get("worker_tracebacks_enabled") is not True or
+                meta.get("gpu_placement_request") != GPU_PLACEMENT or
+                not valid_gpu_placement(meta.get("gpu_placement")) or
                 meta.get("runtime_feature_checks") != plan["runtime_feature_checks"] or
                 meta.get("policy_id") != policy_id or
                 meta.get("policy_sha256") != plan["policy_sha256"][policy_id] or
@@ -311,8 +381,12 @@ def runtime_gate(root: str | Path) -> dict:
         paths = list((run_dir / "diagnostics").glob(f"{label}_*.jsonl"))
         if len(paths) != 1:
             raise ValueError(f"Missing {label} memory telemetry: {run_dir}")
-        snapshots = [event["memory"] for line in paths[0].read_text().splitlines()
-                     if (event := json.loads(line)).get("memory")]
+        events = [json.loads(line) for line in paths[0].read_text().splitlines()]
+        visible = "1" if label == "gpt_oss_cuda_memory" else "0,1"
+        if not events or any(event.get("cuda_visible_devices") != visible or
+                             event.get("logical_cuda_device") != 0 for event in events):
+            raise ValueError(f"Wrong {label} GPU telemetry identity: {run_dir}")
+        snapshots = [event["memory"] for event in events if event.get("memory")]
         peaks = [snapshot["peak_reserved_bytes"] for snapshot in snapshots
                  if isinstance(snapshot.get("peak_reserved_bytes"), int)]
         if not peaks:
@@ -321,6 +395,7 @@ def runtime_gate(root: str | Path) -> dict:
                 if isinstance(snapshot.get("global_free_bytes"), int)]
         memory[label] = {"peak_reserved_bytes": max(peaks),
                          "minimum_global_free_bytes": min(free) if free else None,
+                         "cuda_visible_devices": visible,
                          "path": str(paths[0])}
     return {**report, "terminal_review_observed": bool(review_events),
             "terminal_review_outcomes": [item.get("outcome") for item in review_events],
@@ -343,6 +418,8 @@ def completed(root: str | Path, policy_id: str, plan: dict) -> dict[str, dict]:
                 meta.get("attention_implementation") != REQUESTED_ATTENTION or
                 meta.get("gptoss_metadata", {}).get("attention_implementation") != REQUESTED_ATTENTION or
                 meta.get("worker_tracebacks_enabled") is not True or
+                meta.get("gpu_placement_request") != GPU_PLACEMENT or
+                not valid_gpu_placement(meta.get("gpu_placement")) or
                 meta.get("runtime_feature_checks") != plan["runtime_feature_checks"] or
                 meta.get("policy_sha256") != plan["policy_sha256"][policy_id] or
                 meta.get("policy_configuration") != policy_configuration(policy_id) or
@@ -434,7 +511,10 @@ def run_batch(root: str | Path, policy_id: str, batch: int,
         if not indices:
             return {**current, "run_dir": None}
         path = runner(directory, policy_id, indices, plan)
-        return {**status(root, policy_id, batch), "run_dir": str(path)}
+        result = {**status(root, policy_id, batch), "run_dir": str(path)}
+        if result["blocking_run_status"]:
+            raise RuntimeError(f"Infrastructure-invalid batch run: {path}")
+        return result
 
 
 def aggregate(root: str | Path, policy_id: str) -> dict:
