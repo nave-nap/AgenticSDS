@@ -99,7 +99,7 @@ class FakeWorker:
         return {"gpu_name": "NVIDIA L40S", "model_id": "fake",
                 "attention_implementation": "eager", "cuda_visible_devices": "1",
                 "cuda_device_count": 1, "model_device": "cuda:0",
-                "hf_device_map": {"": "0"}}
+                "hf_device_map": {}}
 
     def begin_episode(self, task_id, seed):
         self.episodes.append((task_id, seed))
@@ -325,6 +325,30 @@ def test_wrong_gpu_placement_stops_before_task(monkeypatch, tmp_path):
             episode_runner=lambda *_args, **_kwargs: pytest.fail("episode ran"))
     assert read_json(next(root.glob("textcraft_*")) / "run.json")["status"] == "failed"
 
+    class WrongMap(FakeWorker):
+        def metadata(self):
+            return {**super().metadata(), "hf_device_map": {"": "1"}}
+
+    root = tmp_path / "wrong_map"
+    with pytest.raises(ValueError, match="GPT-OSS is not isolated"):
+        evaluation._run_tasks(root, "original_v4", [0], plan,
+            qwen_factory=lambda _config: pytest.fail("Qwen loaded"),
+            gpt_factory=WrongMap, memory_factory=lambda *_: None,
+            episode_runner=lambda *_args, **_kwargs: pytest.fail("episode ran"))
+    assert read_json(next(root.glob("textcraft_*")) / "run.json")["status"] == "failed"
+
+    class WrongLocalDevice(FakeWorker):
+        def metadata(self):
+            return {**super().metadata(), "model_device": "cuda:1"}
+
+    root = tmp_path / "wrong_local_device"
+    with pytest.raises(ValueError, match="GPT-OSS is not isolated"):
+        evaluation._run_tasks(root, "original_v4", [0], plan,
+            qwen_factory=lambda _config: pytest.fail("Qwen loaded"),
+            gpt_factory=WrongLocalDevice, memory_factory=lambda *_: None,
+            episode_runner=lambda *_args, **_kwargs: pytest.fail("episode ran"))
+    assert read_json(next(root.glob("textcraft_*")) / "run.json")["status"] == "failed"
+
     class SpilledQwen(FakeQwen):
         def __init__(self, config):
             super().__init__(config)
@@ -337,6 +361,27 @@ def test_wrong_gpu_placement_stops_before_task(monkeypatch, tmp_path):
             memory_factory=lambda *_: None,
             episode_runner=lambda *_args, **_kwargs: pytest.fail("episode ran"))
     assert read_json(next(root.glob("textcraft_*")) / "run.json")["status"] == "failed"
+
+
+def test_empty_gpt_device_map_is_valid_but_distinct_uuids_are_enforced():
+    observed = {"cuda_visible_devices": "1", "cuda_device_count": 1,
+        "gpu_name": "NVIDIA L40S", "model_device": "cuda:0",
+        "hf_device_map": {}}
+    assert evaluation.verify_gptoss_placement(observed)["hf_device_map"] == {}
+    with pytest.raises(ValueError, match="GPT-OSS is not isolated"):
+        evaluation.verify_gptoss_placement({**observed, "cuda_device_count": 2})
+    qwen = {"cuda_visible_devices": "0,1", "cuda_device_count": 2,
+        "gpu_names": ["NVIDIA L40S", "NVIDIA L40S"],
+        "hf_device_map": {"": "0"}, "parameter_devices": ["cuda:0"],
+        "gpu_uuids": ["GPU-A", "GPU-B"]}
+    assert evaluation.valid_gpu_placement({"gptoss": {**observed, "gpu_uuid": "GPU-B"},
+                                           "qwen": qwen})
+    assert not evaluation.valid_gpu_placement({
+        "gptoss": {**observed, "gpu_uuid": "GPU-A"}, "qwen": qwen})
+    assert not evaluation.valid_gpu_placement({
+        "gptoss": {**observed, "gpu_uuid": "GPU-C"}, "qwen": qwen})
+    assert evaluation.valid_gpu_placement({"gptoss": {**observed, "gpu_uuid": None},
+                                           "qwen": {**qwen, "gpu_uuids": [None, None]}})
 
 
 def test_terminal_runtime_gate_checks_episode_and_memory(monkeypatch, tmp_path):

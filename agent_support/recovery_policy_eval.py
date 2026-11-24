@@ -26,7 +26,7 @@ from .recovery_v4_eval import (MANIFEST_SHA256, RECIPE_SHA256, config_for,
                                preflight as v4_preflight)
 from .runner import package_versions
 
-PROTOCOL = "textcraft_recovery_policy30_eager_two_gpu_v1"
+PROTOCOL = "textcraft_recovery_policy30_eager_two_gpu_v2"
 BASE_ARM = "autonomous_recovery_v4"
 REQUESTED_ATTENTION = "eager"
 TRACEBACK_ENV = "AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS"
@@ -131,15 +131,26 @@ def verify_gptoss_placement(metadata: dict) -> dict:
     """The worker sees only allocation GPU 1, mapped locally to cuda:0."""
     placement = {key: metadata.get(key) for key in
         ("cuda_visible_devices", "cuda_device_count", "gpu_name",
-         "model_device", "hf_device_map")}
+         "model_device", "hf_device_map", "gpu_uuid")}
+    device_map = placement["hf_device_map"]
     if (placement["cuda_visible_devices"] != GPU_PLACEMENT["gptoss_worker_gpu"] or
             placement["cuda_device_count"] != 1 or
             placement["gpu_name"] != "NVIDIA L40S" or
             placement["model_device"] != "cuda:0" or
-            not placement["hf_device_map"] or
-            set(placement["hf_device_map"].values()) != {"0"}):
+            not isinstance(device_map, dict) or
+            (device_map and set(device_map.values()) != {"0"})):
         raise ValueError(f"GPT-OSS is not isolated on allocation GPU 1: {placement}")
     return placement
+
+
+def distinct_gpu_identities(gpt_uuid: str | None, qwen_uuids: list | None) -> bool:
+    """Cross-check physical UUIDs when the CUDA runtimes expose them."""
+    if not isinstance(qwen_uuids, list) or len(qwen_uuids) != 2:
+        return False
+    first, second = qwen_uuids
+    return not ((first and second and first == second) or
+                (gpt_uuid and first and gpt_uuid == first) or
+                (gpt_uuid and second and gpt_uuid != second))
 
 
 def verify_qwen_placement(qwen) -> dict:
@@ -149,10 +160,15 @@ def verify_qwen_placement(qwen) -> dict:
                   getattr(qwen.model, "hf_device_map", {}).items()}
     parameter_devices = sorted({str(parameter.device)
                                 for parameter in qwen.model.parameters()})
+    properties = getattr(cuda, "get_device_properties", None)
+    gpu_uuids = [(str(value) if value is not None else None) for value in
+                 (getattr(properties(i), "uuid", None) if callable(properties) else None
+                  for i in range(cuda.device_count()))]
     placement = {"cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
         "cuda_device_count": cuda.device_count(),
         "gpu_names": [cuda.get_device_name(i) for i in range(cuda.device_count())],
-        "hf_device_map": device_map, "parameter_devices": parameter_devices}
+        "gpu_uuids": gpu_uuids, "hf_device_map": device_map,
+        "parameter_devices": parameter_devices}
     if (placement["cuda_visible_devices"] != GPU_PLACEMENT["allocation_visible_devices"] or
             placement["cuda_device_count"] != 2 or
             placement["gpu_names"] != ["NVIDIA L40S", "NVIDIA L40S"] or
@@ -166,18 +182,22 @@ def valid_gpu_placement(value: dict | None) -> bool:
     if not isinstance(value, dict):
         return False
     gpt, qwen = value.get("gptoss", {}), value.get("qwen", {})
+    if not isinstance(gpt, dict) or not isinstance(qwen, dict):
+        return False
+    device_map = gpt.get("hf_device_map")
     return (gpt.get("cuda_visible_devices") == "1" and
             gpt.get("cuda_device_count") == 1 and
             gpt.get("gpu_name") == "NVIDIA L40S" and
             gpt.get("model_device") == "cuda:0" and
-            gpt.get("hf_device_map") and
-            set(gpt["hf_device_map"].values()) == {"0"} and
+            isinstance(device_map, dict) and
+            (not device_map or set(device_map.values()) == {"0"}) and
             qwen.get("cuda_visible_devices") == "0,1" and
             qwen.get("cuda_device_count") == 2 and
             qwen.get("gpu_names") == ["NVIDIA L40S", "NVIDIA L40S"] and
             qwen.get("hf_device_map") and
             set(qwen["hf_device_map"].values()) == {"0"} and
-            qwen.get("parameter_devices") == ["cuda:0"])
+            qwen.get("parameter_devices") == ["cuda:0"] and
+            distinct_gpu_identities(gpt.get("gpu_uuid"), qwen.get("gpu_uuids")))
 
 
 def _run_tasks(root: Path, policy_id: str, indices: list[int], plan: dict,
@@ -226,6 +246,8 @@ def _run_tasks(root: Path, policy_id: str, indices: list[int], plan: dict,
         write_json_atomic(run_dir / "run.json", meta)
         qwen = qwen_factory(config)
         meta["gpu_placement"]["qwen"] = verify_qwen_placement(qwen)
+        if not valid_gpu_placement(meta["gpu_placement"]):
+            raise ValueError("GPT-OSS and Qwen GPU identities or placements conflict")
         write_json_atomic(run_dir / "run.json", meta)
         if gpu_memory_diagnostics_enabled():
             configure = getattr(qwen, "enable_gpu_memory_diagnostics", None)
