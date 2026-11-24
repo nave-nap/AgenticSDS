@@ -91,8 +91,8 @@ def decision_telemetry(record: dict, policy_id: str) -> dict:
         record.get("termination_reason") in TERMINAL_WORKER_STATUSES or
         fallback in {"controller_backend_error", "controller_worker_unavailable",
                      "controller_cuda_oom", "controller_error",
-                     "controller_generation_failure", "support_error",
-                     "accounting_error", "policy_error"} or bool(worker_failures) or
+                     "support_error", "accounting_error", "policy_error"} or
+        bool(worker_failures) or
         any((item.get("result") or {}).get("metadata", {}).get("backend_error")
             for item in supports) or
         bool(record.get("qwen_generation", {}).get("error")) or

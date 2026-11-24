@@ -1,16 +1,36 @@
 # Two-GPU eager evaluation inside Slurm
 
-This v2 correction follows two-GPU commit `93ec1f0`, which started from
-eager commit `01598f4`. Main-process Qwen
+This v3 validity correction follows two-GPU placement commit `5dbfdad`.
+Main-process Qwen
 uses allocation GPU 0. The GPT-OSS child sees only allocation GPU 1, mapped
 to its local CUDA device 0. GPT-OSS stays eager. The evaluator verifies both
 model placements before starting a task and records them in `run.json`.
 CUDA memory events identify each process's visible GPU. No policy, frozen
 task, memory corpus, revision, decoding, limit, or scoring change.
 
-Protocol: `textcraft_recovery_policy30_eager_two_gpu_v2`.
-New root: `/shared_data0/evanpan/agent_support/recovery_policy30_eager_two_gpu_v2`.
+Protocol: `textcraft_recovery_policy30_eager_two_gpu_v3`.
+New root: `/shared_data0/evanpan/agent_support/recovery_policy30_eager_two_gpu_v3`.
 Prior roots must remain untouched.
+
+The v2 seed-51 episode remains historically infrastructure-invalid in its
+stored artifacts. In v3, a returned non-complete controller message such as
+`malformed_final_header` remains a counted controller error and Qwen-action
+fallback, but no longer invalidates infrastructure by itself. CUDA/OOM,
+worker loss, backend and placement failures, support backend failures,
+Qwen generation failures, and environment errors remain invalidating.
+
+Read-only audit of the copied v2 artifacts found 11 decisions. Decision 2
+had a recoverable `controller_parse_error`; decision **10** (not 9) had the
+`malformed_final_header` and `controller_generation_failure` fallback. All
+other decision infrastructure signals were false. The episode status was
+`success`; the final environment step reported `done: true` and
+`success: true`. No terminal worker or environment-error status, Qwen
+generation error, support backend error, or worker failure was present.
+The sole old infrastructure signal was decision 10's fallback label.
+Recomputing telemetry in memory under v3 changes only that signal to false.
+The copied `run.json` and `episode.json` SHA-256 values are respectively
+`ef3524c56ba8beb2b5a26ce93ce1d6c93c21d4e33c7061258f21243236d74b00`
+and `bdd0dea13971402044bb9276a989ffc2033bb1f7fa3e2f85394cdb301f9d485c`.
 
 The GPT-OSS loader requests local `device_map={"": 0}`, then verifies all
 packed expert storage and ordinary parameters on local `cuda:0`. Its
@@ -27,8 +47,8 @@ transfer, create a separate worktree from the Mac terminal:
 
 ```bash
 export LOCUST_HOST=locust-login.seas.upenn.edu
-export TWO_GPU_COMMIT="$(cd /private/tmp/AgenticSDS-accuracy-eager-two-gpu && git rev-parse HEAD)"
-ssh "$LOCUST_HOST" "cd /home/evanpan/AgenticSDS && git fetch origin accuracy-first-eval-eager-two-gpu && git cat-file -e '$TWO_GPU_COMMIT^{commit}' && test ! -e /home/evanpan/AgenticSDS-accuracy-eager-two-gpu-v2 && git worktree add --detach /home/evanpan/AgenticSDS-accuracy-eager-two-gpu-v2 $TWO_GPU_COMMIT"
+export TWO_GPU_COMMIT="$(cd /private/tmp/AgenticSDS-accuracy-eager-validity && git rev-parse HEAD)"
+ssh "$LOCUST_HOST" "cd /home/evanpan/AgenticSDS && git fetch origin accuracy-first-eval-eager-two-gpu-validity && git cat-file -e '$TWO_GPU_COMMIT^{commit}' && test ! -e /home/evanpan/AgenticSDS-accuracy-eager-two-gpu-v3 && git worktree add --detach /home/evanpan/AgenticSDS-accuracy-eager-two-gpu-v3 $TWO_GPU_COMMIT"
 ```
 
 ## Create a new tmux-managed two-GPU allocation
@@ -65,8 +85,8 @@ to the interactive shell without releasing the allocation.
 
 ```bash
 set +e
-export DEPLOY_REPO=/home/evanpan/AgenticSDS-accuracy-eager-two-gpu-v2
-export RECOVERY_ROOT=/shared_data0/evanpan/agent_support/recovery_policy30_eager_two_gpu_v2
+export DEPLOY_REPO=/home/evanpan/AgenticSDS-accuracy-eager-two-gpu-v3
+export RECOVERY_ROOT=/shared_data0/evanpan/agent_support/recovery_policy30_eager_two_gpu_v3
 export AGENT_SUPPORT_GPTOSS_PYTHON=/shared_data0/evanpan/agent_support/venvs/gptoss20b/bin/python
 export AGENT_SUPPORT_GPTOSS_HF_HOME=/shared_data0/evanpan/agent_support/hf_cache
 export AGENT_SUPPORT_M2_200_ARTIFACT_DIR=/shared_data0/evanpan/agent_support/gptoss_memory_v1/memory_scaling_v1/artifacts

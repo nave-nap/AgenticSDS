@@ -26,7 +26,7 @@ from .recovery_v4_eval import (MANIFEST_SHA256, RECIPE_SHA256, config_for,
                                preflight as v4_preflight)
 from .runner import package_versions
 
-PROTOCOL = "textcraft_recovery_policy30_eager_two_gpu_v2"
+PROTOCOL = "textcraft_recovery_policy30_eager_two_gpu_v3"
 BASE_ARM = "autonomous_recovery_v4"
 REQUESTED_ATTENTION = "eager"
 TRACEBACK_ENV = "AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS"

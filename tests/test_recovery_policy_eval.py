@@ -12,7 +12,7 @@ from agent_support.recovery_accuracy_policy import (AccuracyFirstPolicy,
     AccuracyFirstTerminalPolicy, StateAwarePolicy)
 from agent_support.recovery_policy_registry import (POLICIES, make_policy,
                                                     policy_configuration, policy_digest)
-from agent_support.recovery_policy_telemetry import decision_telemetry
+from agent_support.recovery_policy_telemetry import annotate_episode, decision_telemetry
 
 
 @pytest.fixture(autouse=True)
@@ -89,6 +89,63 @@ def test_fatal_worker_and_backend_fallback_are_infrastructure_signals():
         "support_trace": {"events": []}}, "original_v4")
     assert backend["fatal_infrastructure_failure"] is False
     assert backend["infrastructure_failure_signal"] is True
+
+
+def test_malformed_controller_completion_is_recoverable_but_fatal_signals_are_not():
+    record = {"decision": 9, "action": "inventory",
+        "controller_fallback_reason": "controller_generation_failure",
+        "controller_fallback_detail": "malformed_final_header",
+        "qwen_generation": {"text": "inventory"},
+        "support_trace": {"events": [{"error": "malformed_final_header",
+            "controller_generation": {"generation_status": "malformed_final_header"}}]},
+        "outcome": {"success": False, "failed_action": False}}
+    episode = {"status": "success", "success": True, "trace": [record]}
+    annotated = annotate_episode(episode, "original_v4", "fixed", "test")
+    decision = annotated["decision_telemetry"][0]
+    assert decision["controller_fallback_reason"] == "controller_generation_failure"
+    assert len(decision["controller_errors"]) == 2
+    assert decision["fatal_infrastructure_failure"] is False
+    assert decision["infrastructure_failure_signal"] is False
+    assert annotated["infrastructure_invalid"] is False
+    for change in (
+            {"termination_reason": "controller_cuda_fatal"},
+            {"controller_fallback_reason": "controller_backend_error"},
+            {"controller_fallback_reason": "controller_worker_unavailable"},
+            {"controller_fallback_reason": "controller_cuda_oom"},
+            {"qwen_generation": {"error": "CUDA out of memory"}},
+            {"error": "environment_error"},
+            {"support_trace": {"events": [{"request": {"operation": "inspect_state_v1"},
+                "result": {"metadata": {"worker_failure": {"kind": "cuda_oom"}}}}]}}):
+        contaminated = annotate_episode({**episode, "trace": [{**record, **change}]},
+                                       "original_v4", "fixed", "test")
+        assert contaminated["infrastructure_invalid"] is True
+
+
+def test_recoverable_malformed_fallback_does_not_stop_evaluator(monkeypatch, tmp_path):
+    monkeypatch.setattr(evaluation, "require_clean_commit", lambda: "test-commit")
+    plan = evaluation._plan(require_runtime=False)
+
+    def recovered_episode(*args, **kwargs):
+        result = fake_episode(*args, **kwargs)
+        result.update(status="success", success=True, environment_actions=10,
+                      controller_errors=2, parser_errors=1)
+        result["trace"][0].update(
+            controller_fallback_reason="controller_generation_failure",
+            controller_fallback_detail="malformed_final_header")
+        result["trace"][0]["support_trace"]["events"][0]["error"] = "malformed_final_header"
+        return result
+
+    run_dir = evaluation._run_tasks(tmp_path / "smoke" / "accuracy_first_terminal_v1",
+        "accuracy_first_terminal_v1", [0], plan,
+        qwen_factory=FakeQwen, gpt_factory=FakeWorker,
+        memory_factory=lambda *_: None, episode_runner=recovered_episode)
+    assert read_json(run_dir / "run.json")["status"] == "complete"
+    episode = read_json(next((run_dir / "episodes").glob("*.json")))
+    assert episode["infrastructure_invalid"] is False
+    assert episode["decision_telemetry"][0]["controller_fallback_reason"] == (
+        "controller_generation_failure")
+    assert evaluation.stage_report(tmp_path, "smoke",
+        ("accuracy_first_terminal_v1",))["ready"] is True
 
 
 class FakeWorker:
