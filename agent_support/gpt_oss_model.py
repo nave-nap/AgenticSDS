@@ -15,7 +15,10 @@ import time
 
 from packaging.version import Version
 
-from .gpu_memory_diagnostics import DIRECTORY_ENV, GpuMemoryDiagnostics, enabled
+from .gpu_memory_diagnostics import (DIRECTORY_ENV, GpuMemoryDiagnostics,
+                                     TwoGpuMemoryDiagnostics, enabled)
+from .gpt_oss_two_gpu import (assert_device_map, assert_two_gpu_runtime,
+                              enabled as two_gpu_enabled, layer_device_map)
 
 
 
@@ -53,7 +56,8 @@ def check_mxfp4_dependencies(backend_version: str, version_lookup=importlib.meta
     return versions
 
 
-def verify_packed_mxfp4(model, torch_api, hub, expert_type, cuda_index: int = 0) -> dict:
+def verify_packed_mxfp4(model, torch_api, hub, expert_type, cuda_index: int = 0,
+                        device_map: dict[str, int] | None = None) -> dict:
     """Inspect the actual Transformers 5.22.2 Triton representation on every layer."""
     quantization = getattr(model.config, "quantization_config", None)
     method = (quantization.get("quant_method") if isinstance(quantization, dict)
@@ -82,8 +86,15 @@ def verify_packed_mxfp4(model, torch_api, hub, expert_type, cuda_index: int = 0)
         raise RuntimeError(f"GPT-OSS MXFP4 expert-module mismatch: missing={missing}, extra={extra}")
 
     packed_bytes = scale_bytes = 0
+    expert_counts = {"cuda:0": 0, "cuda:1": 0} if device_map else {}
+    packed_bytes_by_device = {"cuda:0": 0, "cuda:1": 0} if device_map else {}
+    scale_bytes_by_device = {"cuda:0": 0, "cuda:1": 0} if device_map else {}
     for name in sorted(expected):
         module = actual[name]
+        module_device = (torch_api.device("cuda", device_map[name.rsplit(".mlp.experts", 1)[0]])
+                         if device_map else expected_device)
+        if device_map:
+            expert_counts[str(module_device)] += 1
         if getattr(module, "_is_hf_initialized", False) is not True:
             raise RuntimeError(f"{name}: MXFP4 expert module is not initialized")
         experts = getattr(module, "num_experts", None)
@@ -108,8 +119,8 @@ def verify_packed_mxfp4(model, torch_api, hub, expert_type, cuda_index: int = 0)
                 raise RuntimeError(f"{location}: packed backing storage must be torch.uint8")
             if not isinstance(getattr(storage, "layout", None), weight_layout_type):
                 raise RuntimeError(f"{location}: wrong MXFP4 weight storage layout")
-            if backing.is_meta or backing.device != expected_device or backing.numel() <= 0:
-                raise RuntimeError(f"{location}: packed backing storage is uninitialized or not on {expected_device}")
+            if backing.is_meta or backing.device != module_device or backing.numel() <= 0:
+                raise RuntimeError(f"{location}: packed backing storage is uninitialized or not on {module_device}")
             logical_elements = experts * logical_shape[1] * logical_shape[2]
             if (isinstance(storage.layout, scale_layout_type)
                     and backing.numel() * 2 != logical_elements):
@@ -131,18 +142,30 @@ def verify_packed_mxfp4(model, torch_api, hub, expert_type, cuda_index: int = 0)
                 raise RuntimeError(f"{location}: MXFP4 scale storage must be torch.uint8")
             if not isinstance(getattr(scale_storage, "layout", None), scale_layout_type):
                 raise RuntimeError(f"{location}: wrong MXFP4 scale storage layout")
-            if (scale_backing.is_meta or scale_backing.device != expected_device
+            if (scale_backing.is_meta or scale_backing.device != module_device
                     or scale_backing.numel() != logical_elements // 32):
-                raise RuntimeError(f"{location}: scale storage is uninitialized, incomplete, or not on {expected_device}")
+                raise RuntimeError(f"{location}: scale storage is uninitialized, incomplete, or not on {module_device}")
             packed_bytes += backing.numel() * backing.element_size()
             scale_bytes += scale_backing.numel() * scale_backing.element_size()
+            if device_map:
+                packed_bytes_by_device[str(module_device)] += backing.numel() * backing.element_size()
+                scale_bytes_by_device[str(module_device)] += scale_backing.numel() * scale_backing.element_size()
 
     parameters = list(model.named_parameters())
     if not parameters:
         raise RuntimeError("GPT-OSS has no ordinary model parameters")
     for name, parameter in parameters:
-        if parameter.is_meta or parameter.device != expected_device:
-            raise RuntimeError(f"{name}: ordinary model parameter is uninitialized or not on {expected_device}")
+        matching = [prefix for prefix in device_map or {} if name == prefix or name.startswith(prefix + ".")]
+        if device_map and not matching:
+            raise RuntimeError(f"{name}: ordinary model parameter has no assigned shard")
+        parameter_device = (torch_api.device("cuda", device_map[max(matching, key=len)])
+                            if device_map else expected_device)
+        if parameter.is_meta or parameter.device != parameter_device:
+            raise RuntimeError(f"{name}: ordinary model parameter is uninitialized or not on {parameter_device}")
+    if device_map and (expert_counts != {"cuda:0": layer_count // 2, "cuda:1": layer_count // 2} or
+                       not all(packed_bytes_by_device.values()) or
+                       not all(scale_bytes_by_device.values())):
+        raise RuntimeError("GPT-OSS packed experts did not occupy both GPUs")
     return {"quantization_method": "mxfp4", "verified_expert_modules": len(expected),
             "verified_packed_projections": len(expected) * 2,
             "representation_type": f"{tensor_type.__module__}.{tensor_type.__qualname__}",
@@ -150,9 +173,12 @@ def verify_packed_mxfp4(model, torch_api, hub, expert_type, cuda_index: int = 0)
             "scale_layout_type": scale_layout_type.__name__,
             "weight_storage_dtype": str(torch_api.uint8),
             "scale_storage_dtype": str(torch_api.uint8),
-            "backing_storage_device": str(expected_device),
+            "backing_storage_device": "multi" if device_map else str(expected_device),
             "packed_weight_storage_bytes": packed_bytes,
-            "scale_storage_bytes": scale_bytes}
+            "scale_storage_bytes": scale_bytes,
+            **({"verified_expert_modules_by_device": expert_counts,
+                "packed_weight_storage_bytes_by_device": packed_bytes_by_device,
+                "scale_storage_bytes_by_device": scale_bytes_by_device} if device_map else {})}
 
 
 def _positions(tokens: list[int], pattern: list[int]) -> list[int]:
@@ -268,12 +294,15 @@ class GptOss20BModel:
     def __init__(self, config: dict):
         dependencies = check_mxfp4_dependencies(config["backend_version"])
         import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
         if not torch.cuda.is_available():
             raise RuntimeError("GPT-OSS-20B requires a CUDA GPU")
         if torch.cuda.get_device_capability(0) < (7, 5):
             raise RuntimeError("MXFP4 kernels require CUDA compute capability at least 7.5")
+        self.two_gpu = two_gpu_enabled()
+        if self.two_gpu:
+            assert_two_gpu_runtime(torch)
         seed = config["seed"]
         random.seed(seed)
         torch.manual_seed(seed)
@@ -303,19 +332,59 @@ class GptOss20BModel:
         self.return_token_id = self.tokenizer.convert_tokens_to_ids(RETURN_TOKEN)
         if not isinstance(self.return_token_id, int) or self.return_token_id < 0:
             raise RuntimeError("GPT-OSS tokenizer lacks the Harmony final-return token")
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_id, device_map={"": 0}, dtype="auto", low_cpu_mem_usage=True,
-            **revision)
+        directory = os.environ.get(DIRECTORY_ENV) if enabled() else None
+        if self.two_gpu and not directory:
+            raise RuntimeError("GPT-OSS two-GPU runtime requires a diagnostics directory")
+        shard_diagnostics = (TwoGpuMemoryDiagnostics(directory, "gpt_oss_cuda_memory", torch)
+                             if self.two_gpu else None)
+        if shard_diagnostics is not None:
+            if shard_diagnostics.path is None:
+                raise RuntimeError("GPT-OSS two-GPU diagnostics could not create a telemetry file")
+            for index in (0, 1):
+                torch.cuda.reset_peak_memory_stats(index)
+            shard_diagnostics.write(event="model_load_start", memory=shard_diagnostics.snapshot())
+        device_map = None
+        if self.two_gpu:
+            model_config = AutoConfig.from_pretrained(self.model_id, **revision)
+            device_map = layer_device_map(model_config.num_hidden_layers)
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_id, device_map=device_map or {"": 0}, dtype="auto",
+                low_cpu_mem_usage=True,
+                **({"attn_implementation": "eager"} if self.two_gpu else {}), **revision)
+        except Exception as exc:
+            if self.two_gpu:
+                shard_diagnostics.write(event="model_load_error", error_type=type(exc).__name__,
+                                        error_detail=str(exc), memory=shard_diagnostics.snapshot())
+                raise RuntimeError(f"Pinned GPT-OSS MXFP4 explicit layer sharding unsupported: {exc}") from exc
+            raise
         self.model.eval()
-        from transformers.integrations import mxfp4 as mxfp4_integration
-        self.quantization_verification = verify_packed_mxfp4(
-            self.model, torch, getattr(mxfp4_integration, "triton_kernels_hub", None),
-            mxfp4_integration.Mxfp4GptOssExperts, cuda_index=0)
+        try:
+            if self.two_gpu:
+                assert_device_map(self.model, device_map)
+                if self.model.config._attn_implementation != "eager":
+                    raise RuntimeError("GPT-OSS two-GPU runtime did not select eager attention")
+            from transformers.integrations import mxfp4 as mxfp4_integration
+            self.quantization_verification = verify_packed_mxfp4(
+                self.model, torch, getattr(mxfp4_integration, "triton_kernels_hub", None),
+                mxfp4_integration.Mxfp4GptOssExperts, cuda_index=0,
+                device_map=device_map)
+        except Exception as exc:
+            if shard_diagnostics is not None:
+                shard_diagnostics.write(event="model_validation_error", error_type=type(exc).__name__,
+                                        error_detail=str(exc), memory=shard_diagnostics.snapshot())
+            raise
         self.peak_gpu_memory_bytes = int(torch.cuda.max_memory_allocated(0))
         self.peak_gpu_reserved_bytes = int(torch.cuda.max_memory_reserved(0))
-        directory = os.environ.get(DIRECTORY_ENV) if enabled() else None
-        self.memory_diagnostics = (GpuMemoryDiagnostics(directory, "gpt_oss_cuda_memory", torch)
+        self.memory_diagnostics = (shard_diagnostics if self.two_gpu else
+                                   GpuMemoryDiagnostics(directory, "gpt_oss_cuda_memory", torch)
                                    if directory else None)
+        if self.two_gpu:
+            self.memory_diagnostics.write(
+                event="model_loaded", cuda_visible_devices=os.environ.get("CUDA_VISIBLE_DEVICES"),
+                hf_device_map={key: str(value) for key, value in self.model.hf_device_map.items()},
+                memory=self.memory_diagnostics.snapshot(),
+                packed_experts=self.quantization_verification)
         self._diagnostic_request_id = 0
 
     def metadata(self) -> dict:
@@ -331,6 +400,12 @@ class GptOss20BModel:
                              "top_p": self.top_p, "top_k": self.top_k,
                              "max_new_tokens": self.max_new_tokens},
                 "gpu_name": self.torch.cuda.get_device_name(0),
+                **({"sharding": "explicit_decoder_layers_12_12",
+                    "hf_device_map": {key: str(value) for key, value in self.model.hf_device_map.items()},
+                    "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+                    "gpu_names": [self.torch.cuda.get_device_name(index) for index in (0, 1)],
+                    "attention_implementation": self.model.config._attn_implementation}
+                   if self.two_gpu else {}),
                 "gpu_compute_capability": list(self.torch.cuda.get_device_capability(0)),
                 "gpu_total_memory_bytes": self.torch.cuda.get_device_properties(0).total_memory,
                 "torch_version": self.torch.__version__,
@@ -390,6 +465,8 @@ class GptOss20BModel:
             input_ids = inputs["input_ids"]
             input_count = int(input_ids.shape[1])
             self.torch.cuda.synchronize(0)
+            if getattr(self, "two_gpu", False):
+                self.torch.cuda.synchronize(1)
             started = time.perf_counter()
             with self.torch.inference_mode():
                 output = self.model.generate(
@@ -398,6 +475,8 @@ class GptOss20BModel:
                     eos_token_id=self.return_token_id,
                     pad_token_id=self.tokenizer.pad_token_id)
             self.torch.cuda.synchronize(0)
+            if getattr(self, "two_gpu", False):
+                self.torch.cuda.synchronize(1)
             elapsed = round(time.perf_counter() - started, 3)
             generated_ids = output[0][input_ids.shape[1]:].tolist()
             parsed = parse_configured_completion(self.tokenizer, generated_ids, limit,
@@ -417,7 +496,9 @@ class GptOss20BModel:
                     "peak_gpu_memory_reserved_bytes": self.peak_gpu_reserved_bytes}
         except Exception as exc:
             error_type = type(exc).__name__
+            error_detail = str(exc)
             raise
         finally:
             if diagnostics is not None:
-                diagnostics.finish(request_id, input_count, limit, error_type)
+                diagnostics.finish(request_id, input_count, limit, error_type,
+                                   error_detail if error_type else None)

@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 from .gpu_memory_diagnostics import DIRECTORY_ENV, enabled
+from .gpt_oss_two_gpu import VISIBLE_ENV, enabled as two_gpu_enabled
 
 
 class ControllerWorkerOOM(RuntimeError):
@@ -47,6 +48,12 @@ class GptOssControllerWorker:
         if not python or not Path(python).is_file():
             raise ValueError(f"Set {variable} to the pinned GPT-OSS Python executable")
         environment = os.environ.copy()
+        if two_gpu_enabled():
+            visible = os.environ.get(VISIBLE_ENV, "")
+            devices = [item.strip() for item in visible.split(",")]
+            if len(devices) != 2 or any(not item for item in devices) or devices[0] == devices[1]:
+                raise ValueError(f"Set {VISIBLE_ENV} to two distinct allocated GPU IDs")
+            environment["CUDA_VISIBLE_DEVICES"] = visible
         hf_variable = spec.get("hf_home_env")
         if hf_variable:
             if not re.fullmatch(r"[A-Z][A-Z0-9_]*", hf_variable) or not os.environ.get(hf_variable):
@@ -56,6 +63,8 @@ class GptOssControllerWorker:
         environment["PYTHONPATH"] = root + os.pathsep + environment.get("PYTHONPATH", "")
         if enabled():
             environment[DIRECTORY_ENV] = str(Path(log_dir).parent / "diagnostics")
+        elif two_gpu_enabled():
+            raise ValueError("Two-GPU GPT-OSS requires AGENT_SUPPORT_GPU_MEMORY_DIAGNOSTICS=1")
         log_path = Path(log_dir) / "gpt_oss_controller_worker.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         self.log = log_path.open("a", encoding="utf-8")
@@ -72,6 +81,10 @@ class GptOssControllerWorker:
                     self.model_metadata.get("model_id") != spec["model"]["model_id"] or
                     self.model_metadata.get("model_revision") != spec["model"]["model_revision"]):
                 raise ValueError("Controller worker model identity or revision differs")
+            if two_gpu_enabled() and (self.model_metadata.get("sharding") != "explicit_decoder_layers_12_12" or
+                                      self.model_metadata.get("verified_expert_modules_by_device") !=
+                                      {"cuda:0": 12, "cuda:1": 12}):
+                raise RuntimeError("GPT-OSS did not load packed experts on both requested GPUs")
         except BaseException:
             self.close()
             raise
