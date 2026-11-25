@@ -19,6 +19,7 @@ from .gpu_memory_diagnostics import (DIRECTORY_ENV, GpuMemoryDiagnostics,
                                      TwoGpuMemoryDiagnostics, enabled)
 from .gpt_oss_two_gpu import (assert_device_map, assert_two_gpu_runtime,
                               enabled as two_gpu_enabled, layer_device_map)
+from .gpt_oss_chunked_eager import enabled as chunked_eager_enabled, register_chunked_eager
 
 
 
@@ -301,6 +302,7 @@ class GptOss20BModel:
         if torch.cuda.get_device_capability(0) < (7, 5):
             raise RuntimeError("MXFP4 kernels require CUDA compute capability at least 7.5")
         self.two_gpu = two_gpu_enabled()
+        self.chunked_eager = self.two_gpu and chunked_eager_enabled()
         if self.two_gpu:
             assert_two_gpu_runtime(torch)
         seed = config["seed"]
@@ -347,11 +349,12 @@ class GptOss20BModel:
         if self.two_gpu:
             model_config = AutoConfig.from_pretrained(self.model_id, **revision)
             device_map = layer_device_map(model_config.num_hidden_layers)
+        attention = (register_chunked_eager(shard_diagnostics) if self.chunked_eager else "eager")
         try:
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_id, device_map=device_map or {"": 0}, dtype="auto",
                 low_cpu_mem_usage=True,
-                **({"attn_implementation": "eager"} if self.two_gpu else {}), **revision)
+                **({"attn_implementation": attention} if self.two_gpu else {}), **revision)
         except Exception as exc:
             if self.two_gpu:
                 shard_diagnostics.write(event="model_load_error", error_type=type(exc).__name__,
@@ -362,8 +365,8 @@ class GptOss20BModel:
         try:
             if self.two_gpu:
                 assert_device_map(self.model, device_map)
-                if self.model.config._attn_implementation != "eager":
-                    raise RuntimeError("GPT-OSS two-GPU runtime did not select eager attention")
+                if self.model.config._attn_implementation != attention:
+                    raise RuntimeError("GPT-OSS two-GPU runtime selected the wrong attention backend")
             from transformers.integrations import mxfp4 as mxfp4_integration
             self.quantization_verification = verify_packed_mxfp4(
                 self.model, torch, getattr(mxfp4_integration, "triton_kernels_hub", None),
@@ -380,6 +383,25 @@ class GptOss20BModel:
                                    GpuMemoryDiagnostics(directory, "gpt_oss_cuda_memory", torch)
                                    if directory else None)
         if self.two_gpu:
+            for index, layer in enumerate(self.model.model.layers):
+                expected_device = f"cuda:{0 if index < 12 else 1}"
+                def before_projection(_module, args, *, layer_index=index, expected=expected_device):
+                    inputs = args[0]
+                    if inputs.shape[-2] > 1:
+                        observed = str(inputs.device)
+                        self.memory_diagnostics.write(event="layer_q_proj_enter", layer=layer_index,
+                                                      query_tokens=inputs.shape[-2], execution_device=observed,
+                                                      memory=self.memory_diagnostics.snapshot())
+                        if observed != expected:
+                            raise RuntimeError(f"GPT-OSS layer {layer_index} executed on {observed}, expected {expected}")
+                def after_layer(_module, _args, output, *, layer_index=index):
+                    if output.shape[-2] > 1:
+                        observed = str(output.device)
+                        self.memory_diagnostics.write(event="layer_complete", layer=layer_index,
+                                                      query_tokens=output.shape[-2], execution_device=observed,
+                                                      memory=self.memory_diagnostics.snapshot())
+                layer.self_attn.q_proj.register_forward_pre_hook(before_projection)
+                layer.register_forward_hook(after_layer)
             self.memory_diagnostics.write(
                 event="model_loaded", cuda_visible_devices=os.environ.get("CUDA_VISIBLE_DEVICES"),
                 hf_device_map={key: str(value) for key, value in self.model.hf_device_map.items()},

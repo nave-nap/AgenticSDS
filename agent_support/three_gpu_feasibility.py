@@ -11,11 +11,13 @@ from pathlib import Path
 from .common import canonical_digest, write_json_atomic
 from .autonomous_evaluation import require_clean_commit
 from .gpt_oss_two_gpu import SHARD_ENV, VISIBLE_ENV
+from .gpt_oss_chunked_eager import ENABLE_ENV as CHUNKED_ENV, NAME as CHUNKED_NAME
 from .recovery_v4_eval import config_for, manifest, memory_checks
 
 
-PROTOCOL = "three_gpu_mxfp4_eager_v1"
+PROTOCOL = "three_gpu_chunked_eager_v2"
 TARGET_TOKENS = 8887
+MIN_FREE_BYTES = 10 * 1024**3
 
 
 def preflight() -> dict:
@@ -28,7 +30,8 @@ def preflight() -> dict:
             "memory": checks, "gptoss_revision": configs[arms[0]]["autonomous_support"]["model"]["model"]["model_revision"],
             "qwen_revision": configs[arms[0]]["model_revision"],
             "shard_devices": "worker CUDA ordinal 0/1; Qwen isolated on parent CUDA ordinal 0",
-            "target_input_tokens": TARGET_TOKENS, "attention": "eager"}
+            "target_input_tokens": TARGET_TOKENS, "attention": CHUNKED_NAME,
+            "minimum_required_free_bytes_per_gptoss_gpu": MIN_FREE_BYTES}
 
 
 def _synthetic_messages(worker) -> list[dict]:
@@ -64,6 +67,28 @@ def _messages(worker, path: Path | None) -> tuple[list[dict], str]:
     return messages, "archived_exact_request"
 
 
+def validate_prefill_execution(records: list[dict], input_tokens: int) -> dict:
+    entered = {row["layer"]: row for row in records if row.get("event") == "layer_q_proj_enter"
+               and row.get("query_tokens") == input_tokens}
+    completed = {row["layer"]: row for row in records if row.get("event") == "layer_complete"
+                 and row.get("query_tokens") == input_tokens}
+    if set(entered) != set(range(24)) or set(completed) != set(range(24)):
+        raise RuntimeError("Long prefill did not execute all 24 decoder layers")
+    for index in range(24):
+        expected_device = f"cuda:{0 if index < 12 else 1}"
+        if entered[index]["execution_device"] != expected_device:
+            raise RuntimeError(f"Long prefill layer {index} ran on the wrong GPU")
+    chunk_events = [row for row in records if row.get("event") == "attention_chunk_end"
+                    and row.get("query_tokens") == input_tokens]
+    if not any(row.get("layer") == 0 for row in chunk_events) or not any(
+            row.get("layer") == 23 for row in chunk_events):
+        raise RuntimeError("Long prefill did not exercise chunked attention across both GPUs")
+    return {"prefill_layers_completed": 24,
+            "first_layer_device": entered[0]["execution_device"],
+            "last_layer_device": entered[23]["execution_device"],
+            "recorded_attention_chunk_ends": len(chunk_events)}
+
+
 def run(output_dir: Path, messages_file: Path | None) -> dict:
     if output_dir.exists():
         raise FileExistsError(output_dir)
@@ -78,6 +103,7 @@ def run(output_dir: Path, messages_file: Path | None) -> dict:
                 not qwen_device or "," in qwen_device or
                 len(worker_devices) != 2 or any(not item for item in worker_devices) or
                 len({qwen_device, *worker_devices}) != 3 or
+                os.environ.get(CHUNKED_ENV) != "1" or
                 os.environ.get("AGENT_SUPPORT_GPU_MEMORY_DIAGNOSTICS") != "1" or
                 os.environ.get("AGENT_SUPPORT_GPTOSS_CUDA_CACHE_RELEASE", "0") != "0"):
             raise RuntimeError("Three-GPU sharding and memory telemetry are not configured")
@@ -90,6 +116,8 @@ def run(output_dir: Path, messages_file: Path | None) -> dict:
         config = config_for("autonomous_recovery_v4")
         worker = GptOssControllerWorker(config["autonomous_support"]["model"], output_dir / "workers")
         result["gptoss_metadata"] = worker.metadata()
+        if worker.metadata().get("attention_implementation") != CHUNKED_NAME:
+            raise RuntimeError("GPT-OSS did not load the chunked eager attention backend")
         torch.cuda.reset_peak_memory_stats(0)
         qwen_minimum_free = torch.cuda.mem_get_info(0)[0]
         qwen_samples = 0
@@ -133,8 +161,9 @@ def run(output_dir: Path, messages_file: Path | None) -> dict:
         generation = worker.generate(messages, max_new_tokens=1024)
         result["generation"] = {key: generation[key] for key in
                                 ("input_tokens", "output_tokens", "generation_status", "inference_seconds")}
-        if generation["input_tokens"] != TARGET_TOKENS or generation["output_tokens"] < 1:
-            raise RuntimeError("Long GPT-OSS generation did not run")
+        if (generation["input_tokens"] != TARGET_TOKENS or generation["output_tokens"] < 1 or
+                generation["generation_status"] != "complete"):
+            raise RuntimeError("Long GPT-OSS generation did not complete successfully")
         files = list((output_dir / "diagnostics").glob("gpt_oss_cuda_memory_*.jsonl"))
         if len(files) != 1:
             raise RuntimeError("Expected one GPT-OSS memory telemetry file")
@@ -143,6 +172,7 @@ def run(output_dir: Path, messages_file: Path | None) -> dict:
         starts = [row for row in records if row.get("event") == "generation_start"]
         if len(ends) != 2 or len(starts) != 2 or ends[-1]["status"] != "ok":
             raise RuntimeError("Incomplete two-GPU generation telemetry")
+        result["forward_execution"] = validate_prefill_execution(records, TARGET_TOKENS)
         result["gpu_memory"] = {key: {"peak_allocated_bytes": value["peak_allocated_bytes"],
                                       "peak_reserved_bytes": value["peak_reserved_bytes"],
                                       "minimum_global_free_bytes": ends[-1]["minimum_global_free_bytes"][key],
@@ -151,9 +181,10 @@ def run(output_dir: Path, messages_file: Path | None) -> dict:
                                 for key, value in ends[-1]["memory"]["devices"].items()}
         if ends[-1]["sampling_errors"] or any(
                 row["free_memory_samples"] < 1 or
+                row["minimum_global_free_bytes"] < MIN_FREE_BYTES or
                 row["peak_allocated_bytes"] <= row["pre_generation_allocated_bytes"]
                 for row in result["gpu_memory"].values()):
-            raise RuntimeError("Temporary generation allocations were not verified on both GPT-OSS GPUs")
+            raise RuntimeError("Two-GPU generation allocations or memory headroom failed validation")
         result["status"] = "infrastructure_valid"
     except Exception as exc:
         result.update(status="failed", error_type=type(exc).__name__, error_detail=str(exc))

@@ -6,8 +6,10 @@ import contextlib
 import json
 import os
 import sys
+import traceback
 
 from .gpu_memory_diagnostics import cache_release_enabled
+from .gpt_oss_two_gpu import enabled as two_gpu_enabled
 
 
 def serve(source=None, sink=None, model_factory=None) -> None:
@@ -59,6 +61,8 @@ def serve(source=None, sink=None, model_factory=None) -> None:
             else:
                 raise ValueError(f"Unknown controller worker operation: {op}")
         except Exception as exc:
+            if two_gpu_enabled():
+                traceback.print_exc(file=sys.stderr)
             response = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
         if release_after_generation and cache_release_enabled():
             # The generation frame and exception handler have both unwound here.
