@@ -112,3 +112,23 @@ def test_terminated_timeout_is_unavailable_but_unrelated_runtime_error_is_not(mo
     with pytest.raises(InterruptedError) as temporary:
         worker._request({"op": "generate", "messages": []})
     assert not isinstance(temporary.value, controller_backend.ControllerWorkerUnavailable)
+
+
+def test_startup_deadline_is_separate_from_generation_deadline(monkeypatch):
+    worker = worker_response(monkeypatch, {"ok": True, "metadata": {}})
+    worker.startup_timeout = 5400
+    observed = []
+    def select_ready(readers, _writers, _errors, timeout):
+        observed.append(timeout)
+        return readers, [], []
+    monkeypatch.setattr(controller_backend.select, "select", select_ready)
+    worker._request({"op": "init", "config": {}})
+    worker.process.stdout = io.StringIO('{"ok": true, "generation": {}}\n')
+    worker._request({"op": "generate", "messages": []})
+    assert observed == [5400, 1]
+
+    worker.process.terminate = lambda: None
+    monkeypatch.setattr(controller_backend.select, "select", lambda *_: ([], [], []))
+    with pytest.raises(controller_backend.ControllerWorkerUnavailable,
+                       match="startup timed out after 5400 seconds"):
+        worker._request({"op": "init", "config": {}})

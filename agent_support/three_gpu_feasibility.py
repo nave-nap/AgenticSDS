@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import threading
+import time
 from pathlib import Path
 
 from .common import canonical_digest, write_json_atomic
@@ -114,7 +115,11 @@ def run(output_dir: Path, messages_file: Path | None) -> dict:
         if torch.cuda.device_count() != 1 or "L40S" not in torch.cuda.get_device_name(0):
             raise RuntimeError("Qwen process must see exactly one L40S")
         config = config_for("autonomous_recovery_v4")
-        worker = GptOssControllerWorker(config["autonomous_support"]["model"], output_dir / "workers")
+        startup_start = time.monotonic()
+        try:
+            worker = GptOssControllerWorker(config["autonomous_support"]["model"], output_dir / "workers")
+        finally:
+            result["gptoss_worker_startup_seconds"] = round(time.monotonic() - startup_start, 3)
         result["gptoss_metadata"] = worker.metadata()
         if worker.metadata().get("attention_implementation") != CHUNKED_NAME:
             raise RuntimeError("GPT-OSS did not load the chunked eager attention backend")

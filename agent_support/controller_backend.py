@@ -12,6 +12,8 @@ from pathlib import Path
 from .gpu_memory_diagnostics import DIRECTORY_ENV, enabled
 from .gpt_oss_two_gpu import VISIBLE_ENV, enabled as two_gpu_enabled
 
+STARTUP_TIMEOUT_ENV = "AGENT_SUPPORT_GPTOSS_STARTUP_TIMEOUT_SECONDS"
+
 
 class ControllerWorkerOOM(RuntimeError):
     """A worker-reported CUDA out-of-memory failure."""
@@ -65,6 +67,10 @@ class GptOssControllerWorker:
             environment[DIRECTORY_ENV] = str(Path(log_dir).parent / "diagnostics")
         elif two_gpu_enabled():
             raise ValueError("Two-GPU GPT-OSS requires AGENT_SUPPORT_GPU_MEMORY_DIAGNOSTICS=1")
+        self.timeout = int(spec.get("timeout_seconds", 1800))
+        self.startup_timeout = int(os.environ.get(STARTUP_TIMEOUT_ENV, self.timeout))
+        if self.startup_timeout <= 0:
+            raise ValueError("GPT-OSS startup timeout must be positive")
         log_path = Path(log_dir) / "gpt_oss_controller_worker.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         self.log = log_path.open("a", encoding="utf-8")
@@ -72,7 +78,6 @@ class GptOssControllerWorker:
             [python, "-u", "-m", "agent_support.gpt_oss_controller_worker"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log,
             text=True, bufsize=1, env=environment)
-        self.timeout = int(spec.get("timeout_seconds", 1800))
         self.max_new_tokens = spec["model"]["max_new_tokens"]
         self.closed = False
         try:
@@ -108,7 +113,8 @@ class GptOssControllerWorker:
                 raise ControllerWorkerUnavailable(f"protocol write failed: {exc}") from exc
             raise
         try:
-            ready, _, _ = select.select([stdout], [], [], self.timeout)
+            timeout = self.startup_timeout if payload["op"] == "init" else self.timeout
+            ready, _, _ = select.select([stdout], [], [], timeout)
         except (OSError, ValueError) as exc:
             if stdout.closed or self.process.poll() is not None:
                 raise ControllerWorkerUnavailable(f"protocol stream closed: {exc}") from exc
@@ -116,7 +122,9 @@ class GptOssControllerWorker:
         if not ready:
             self.process.terminate()
             self.unusable = True
-            raise ControllerWorkerUnavailable("worker timed out and was terminated")
+            detail = (f"worker startup timed out after {timeout} seconds and was terminated"
+                      if payload["op"] == "init" else "worker timed out and was terminated")
+            raise ControllerWorkerUnavailable(detail)
         try:
             line = stdout.readline()
         except (OSError, ValueError) as exc:

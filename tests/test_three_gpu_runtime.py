@@ -121,9 +121,12 @@ def test_worker_isolates_requested_gpus_and_rejects_unsharded_load(monkeypatch, 
     monkeypatch.setenv(SHARD_ENV, "1")
     monkeypatch.setenv(VISIBLE_ENV, "1,2")
     monkeypatch.setenv("AGENT_SUPPORT_GPU_MEMORY_DIAGNOSTICS", "1")
+    monkeypatch.setenv("AGENT_SUPPORT_GPTOSS_STARTUP_TIMEOUT_SECONDS", "5400")
     spec = {"python_env": "FAKE_GPT_PYTHON", "model": {
         "model_id": "fake", "model_revision": "fixed", "max_new_tokens": 12}}
     worker = GptOssControllerWorker(spec, tmp_path / "workers")
+    assert worker.startup_timeout == 5400
+    assert worker.timeout == 1800
     worker.close()
     assert captured[-1]["CUDA_VISIBLE_DEVICES"] == "1,2"
     assert captured[-1]["AGENT_SUPPORT_GPU_MEMORY_DIAGNOSTICS_DIR"] == str(tmp_path / "diagnostics")
