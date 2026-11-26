@@ -41,6 +41,18 @@ cd "$repo_root"
 nvidia-smi --query-gpu=index,uuid,name,memory.total,memory.free --format=csv
 
 case "$THREE_GPU_PHASE" in
+  overnight)
+    : "${THREE_GPU_CACHE_JOB_ID:?Set the completed CPU cache job ID}"
+    attempt="${THREE_GPU_ATTEMPT:?Overnight wrapper must create its unique attempt directory}"
+    mapfile -t cache_results < <(find "$THREE_GPU_ROOT/cpu" -path "*/job_${THREE_GPU_CACHE_JOB_ID}_restart_*/cache/cache_result.json" -print | sort -V)
+    test "${#cache_results[@]}" -gt 0
+    cache_result="${cache_results[${#cache_results[@]}-1]}"
+    args=(--output-dir "$attempt/run" --cache-result "$cache_result")
+    if [[ -n "${THREE_GPU_MESSAGES_FILE:-}" ]]; then
+      args+=(--messages-file "$THREE_GPU_MESSAGES_FILE")
+    fi
+    "$VENV_PATH/bin/python" -m agent_support.three_gpu_overnight gpu "${args[@]}"
+    ;;
   performance)
     test ! -e "$THREE_GPU_ROOT/performance_probe"
     args=(--output-dir "$THREE_GPU_ROOT/performance_probe")

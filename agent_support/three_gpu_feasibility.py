@@ -35,27 +35,27 @@ def preflight() -> dict:
             "minimum_required_free_bytes_per_gptoss_gpu": MIN_FREE_BYTES}
 
 
-def _synthetic_messages(worker) -> list[dict]:
+def _synthetic_messages(worker, target_tokens: int = TARGET_TOKENS) -> list[dict]:
     prefix = "For the runtime memory feasibility check, inspect this repeated inventory note.\n"
     def messages(n: int, suffix: str = "") -> list[dict]:
         return [{"role": "user", "content": prefix + (" inventory" * n) + suffix}]
-    low, high = 0, TARGET_TOKENS
+    low, high = 0, target_tokens
     while low < high:
         middle = (low + high + 1) // 2
-        if worker.count_messages_tokens(messages(middle)) <= TARGET_TOKENS:
+        if worker.count_messages_tokens(messages(middle)) <= target_tokens:
             low = middle
         else:
             high = middle - 1
     base = messages(low)
     count = worker.count_messages_tokens(base)
-    if count == TARGET_TOKENS:
+    if count == target_tokens:
         return base
     for filler in (" x", " z", "!", "\n"):
         for repeats in range(1, 24):
             candidate = messages(low, filler * repeats)
-            if worker.count_messages_tokens(candidate) == TARGET_TOKENS:
+            if worker.count_messages_tokens(candidate) == target_tokens:
                 return candidate
-    raise RuntimeError("Could not construct exactly 8,887 GPT-OSS input tokens")
+    raise RuntimeError(f"Could not construct exactly {target_tokens:,} GPT-OSS input tokens")
 
 
 def _messages(worker, path: Path | None) -> tuple[list[dict], str]:

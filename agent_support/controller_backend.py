@@ -154,6 +154,10 @@ class GptOssControllerWorker:
         return self._request({"op": "generate", "messages": messages,
                               "max_new_tokens": max_new_tokens})["generation"]
 
+    def profile_generate(self, messages: list[dict]) -> dict:
+        return self._request({"op": "profile_generate", "messages": messages,
+                              "max_new_tokens": 2})
+
     def begin_episode(self, task_id: str, seed: int) -> None:
         import hashlib
         material = f"{seed}\0{task_id}\0gpt_oss_controller".encode()

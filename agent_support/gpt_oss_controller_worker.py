@@ -8,7 +8,7 @@ import os
 import sys
 import traceback
 
-from .gpu_memory_diagnostics import cache_release_enabled
+from .gpu_memory_diagnostics import DIRECTORY_ENV, cache_release_enabled
 from .gpt_oss_two_gpu import enabled as two_gpu_enabled
 
 
@@ -34,15 +34,44 @@ def serve(source=None, sink=None, model_factory=None) -> None:
                 if model is None:
                     raise ValueError("Controller model is not initialized")
                 response = {"ok": True, "count": model.count_messages_tokens(request["messages"])}
-            elif op == "generate":
+            elif op in {"generate", "profile_generate"}:
                 if model is None:
                     raise ValueError("Controller model is not initialized")
                 messages = request["messages"]
                 max_new_tokens = request.get("max_new_tokens")
                 release_after_generation = True
+                from .gpt_oss_inference_diagnostics import ENABLE_ENV, InferenceSampler
+                sampling = (InferenceSampler(os.environ[DIRECTORY_ENV], model.torch)
+                            if os.environ.get(ENABLE_ENV) == "1" else contextlib.nullcontext())
+                profile_path = None
+                if op == "profile_generate":
+                    if os.environ.get("AGENT_SUPPORT_GPTOSS_ALLOW_PROFILER") != "1":
+                        raise RuntimeError("CUDA profiler is not enabled")
+                    if max_new_tokens is None or not 1 <= max_new_tokens <= 2:
+                        raise ValueError("Profiler output is limited to two tokens")
+                    if model.count_messages_tokens(messages) > 128:
+                        raise ValueError("Profiler prompt exceeds 128 tokens")
+                    import torch
+                    from datetime import datetime, timezone
+                    from pathlib import Path
+                    location = Path(os.environ[DIRECTORY_ENV])
+                    location.mkdir(parents=True, exist_ok=True)
+                    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+                    profile_path = location / f"gpt_oss_cuda_profile_{stamp}_{os.getpid()}.json"
+                    profile = torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU,
+                                                                 torch.profiler.ProfilerActivity.CUDA],
+                                                     record_shapes=False, profile_memory=False,
+                                                     with_stack=False)
+                else:
+                    profile = contextlib.nullcontext()
                 with contextlib.redirect_stdout(sys.stderr):
-                    generated = model.generate(messages, max_new_tokens=max_new_tokens)
+                    with sampling, profile:
+                        generated = model.generate(messages, max_new_tokens=max_new_tokens)
+                    if profile_path is not None:
+                        profile.export_chrome_trace(str(profile_path))
                 response = {"ok": True, "generation": generated}
+                if profile_path is not None:
+                    response["profile_path"] = str(profile_path)
             elif op == "seed":
                 if model is None:
                     raise ValueError("Controller model is not initialized")
