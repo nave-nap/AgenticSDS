@@ -78,13 +78,14 @@ class GptOssControllerWorker:
         if model_load_diagnostics_enabled():
             environment[WORKER_LOG_ENV] = str(log_path.resolve())
         self.log = log_path.open("a", encoding="utf-8")
-        self.process = subprocess.Popen(
-            [python, "-u", "-m", "agent_support.gpt_oss_controller_worker"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log,
-            text=True, bufsize=1, env=environment)
-        self.max_new_tokens = spec["model"]["max_new_tokens"]
         self.closed = False
+        self.process = None
         try:
+            self.process = subprocess.Popen(
+                [python, "-u", "-m", "agent_support.gpt_oss_controller_worker"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log,
+                text=True, bufsize=1, env=environment)
+            self.max_new_tokens = spec["model"]["max_new_tokens"]
             self.model_metadata = self._request({"op": "init", "config": spec["model"]})["metadata"]
             if (self.model_metadata.get("model_type") != "gpt_oss_20b" or
                     self.model_metadata.get("model_id") != spec["model"]["model_id"] or
@@ -94,8 +95,16 @@ class GptOssControllerWorker:
                                       self.model_metadata.get("verified_expert_modules_by_device") !=
                                       {"cuda:0": 12, "cuda:1": 12}):
                 raise RuntimeError("GPT-OSS did not load packed experts on both requested GPUs")
-        except BaseException:
-            self.close()
+        except BaseException as exc:
+            exc.worker_log_path = str(log_path)
+            try:
+                self.close()
+            except Exception as cleanup_error:
+                exc.worker_cleanup_error = repr(cleanup_error)
+            try:
+                exc.worker_exit_code = self.process.poll() if self.process is not None else None
+            except Exception as poll_error:
+                exc.worker_poll_error = repr(poll_error)
             raise
 
     def _request(self, payload: dict) -> dict:
@@ -168,7 +177,7 @@ class GptOssControllerWorker:
         if self.closed:
             return
         try:
-            if self.process.poll() is None:
+            if self.process is not None and self.process.poll() is None:
                 try:
                     self._request({"op": "shutdown"})
                 except Exception:

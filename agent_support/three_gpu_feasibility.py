@@ -5,8 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
+import sys
 import threading
 import time
+import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .common import canonical_digest, write_json_atomic
@@ -90,14 +94,101 @@ def validate_prefill_execution(records: list[dict], input_tokens: int) -> dict:
             "recorded_attention_chunk_ends": len(chunk_events)}
 
 
-def run(output_dir: Path, messages_file: Path | None) -> dict:
+def _worker_evidence(output_dir: Path, worker=None, error=None) -> dict:
+    path = output_dir / "workers" / "gpt_oss_controller_worker.log"
+    process = getattr(worker, "process", None)
+    exit_code = (process.poll() if process is not None else
+                 getattr(error, "worker_exit_code", None))
+    evidence = {"worker_exit_code": exit_code,
+                "worker_log_path": str(path), "worker_log_exists": path.exists()}
+    if error is not None and getattr(error, "worker_cleanup_error", None):
+        evidence["worker_cleanup_error"] = error.worker_cleanup_error
+    if error is not None and getattr(error, "worker_poll_error", None):
+        evidence["worker_poll_error"] = error.worker_poll_error
+    if path.exists():
+        try:
+            with path.open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                size = stream.tell()
+                stream.seek(max(0, size - 8192))
+                evidence["worker_log_tail"] = stream.read().decode("utf-8", errors="replace")
+                evidence["worker_log_bytes"] = size
+        except OSError as exc:
+            evidence["worker_log_read_error"] = repr(exc)
+    return evidence
+
+
+def _write_result(output_dir: Path, result: dict) -> None:
+    try:
+        write_json_atomic(output_dir / "feasibility_result.json", result)
+    except Exception as write_error:
+        result["result_write_error"] = repr(write_error)
+        if result.get("status") != "failed":
+            result.update(status="failed", error_type=type(write_error).__name__,
+                          error_detail=f"Could not write feasibility result: {write_error}")
+        # An exclusive fallback avoids replacing an earlier artifact if atomic writes fail.
+        try:
+            with (output_dir / "feasibility_result_fallback.json").open("x", encoding="utf-8") as stream:
+                json.dump(result, stream, indent=2, sort_keys=True)
+                stream.write("\n")
+        except Exception as fallback_error:
+            print(f"Feasibility result fallback write failed: {fallback_error!r}", file=sys.stderr,
+                  flush=True)
+        print(json.dumps(result, indent=2, sort_keys=True), file=sys.stderr, flush=True)
+
+
+def _stage(output_dir: Path, result: dict, name: str) -> None:
+    result["startup_stage"] = name
+    print(f"Feasibility startup stage: {name}", file=sys.stderr, flush=True)
+    row = {"timestamp_utc": datetime.now(timezone.utc).isoformat(), "stage": name,
+           "pid": os.getpid(), "slurm_job_id": os.environ.get("SLURM_JOB_ID")}
+    with (output_dir / "startup_events.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(row) + "\n")
+        stream.flush()
+    write_json_atomic(output_dir / "feasibility_result.json", result)
+
+
+def _check_worker_process(spec: dict, worker_devices: list[str]) -> dict:
+    python = os.environ.get(spec["python_env"], "")
+    if not python or not Path(python).is_file():
+        raise ValueError("Pinned GPT-OSS Python executable is unavailable")
+    environment = os.environ.copy()
+    environment["CUDA_VISIBLE_DEVICES"] = ",".join(worker_devices)
+    hf_variable = spec.get("hf_home_env")
+    if hf_variable:
+        environment["HF_HOME"] = os.environ[hf_variable]
+    script = ("import json, torch, agent_support.gpt_oss_controller_worker; "
+              "print(json.dumps({'count': torch.cuda.device_count(), "
+              "'names': [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]}))")
+    completed = subprocess.run([python, "-c", script], env=environment,
+                               capture_output=True, text=True, timeout=60)
+    evidence = {"exit_code": completed.returncode, "stderr_tail": completed.stderr[-8192:],
+                "cuda_visible_devices": environment["CUDA_VISIBLE_DEVICES"]}
+    if completed.returncode != 0:
+        error = RuntimeError(f"GPT-OSS worker import check exited {completed.returncode}: "
+                             f"{completed.stderr[-8192:]}")
+        error.worker_exit_code = completed.returncode
+        raise error
+    identity = json.loads(completed.stdout.strip().splitlines()[-1])
+    evidence.update(identity)
+    if identity.get("count") != 2 or any("L40S" not in name for name in identity.get("names", [])):
+        raise RuntimeError(f"GPT-OSS worker process sees incorrect GPU identities: {identity}")
+    return evidence
+
+
+def run(output_dir: Path, messages_file: Path | None, *, startup_only: bool = False) -> dict:
     if output_dir.exists():
         raise FileExistsError(output_dir)
     output_dir.mkdir(parents=True)
-    result = {**preflight(), "status": "running", "request_source": None,
-              "git_commit": require_clean_commit()}
+    result = {"status": "running", "request_source": None,
+              "protocol": PROTOCOL, "startup_stage": "created"}
     worker = None
     try:
+        _stage(output_dir, result, "preflight")
+        result.update(preflight())
+        _stage(output_dir, result, "clean_commit")
+        result["git_commit"] = require_clean_commit()
+        _stage(output_dir, result, "gpu_visibility")
         qwen_device = os.environ.get("CUDA_VISIBLE_DEVICES", "")
         worker_devices = [item.strip() for item in os.environ.get(VISIBLE_ENV, "").split(",")]
         if (os.environ.get(SHARD_ENV) != "1" or
@@ -114,7 +205,18 @@ def run(output_dir: Path, messages_file: Path | None) -> dict:
 
         if torch.cuda.device_count() != 1 or "L40S" not in torch.cuda.get_device_name(0):
             raise RuntimeError("Qwen process must see exactly one L40S")
+        result["parent_gpu_identity"] = {"cuda_visible_devices": qwen_device,
+                                         "name": torch.cuda.get_device_name(0)}
+        result["worker_cuda_visible_devices"] = worker_devices
         config = config_for("autonomous_recovery_v4")
+        if startup_only:
+            _stage(output_dir, result, "worker_process_check")
+            result["worker_process_check"] = _check_worker_process(
+                config["autonomous_support"]["model"], worker_devices)
+            result["status"] = "startup_valid"
+            _stage(output_dir, result, "startup_valid")
+            return result
+        _stage(output_dir, result, "worker_initialize")
         startup_start = time.monotonic()
         try:
             worker = GptOssControllerWorker(config["autonomous_support"]["model"], output_dir / "workers")
@@ -123,6 +225,7 @@ def run(output_dir: Path, messages_file: Path | None) -> dict:
         result["gptoss_metadata"] = worker.metadata()
         if worker.metadata().get("attention_implementation") != CHUNKED_NAME:
             raise RuntimeError("GPT-OSS did not load the chunked eager attention backend")
+        _stage(output_dir, result, "qwen_initialize")
         torch.cuda.reset_peak_memory_stats(0)
         qwen_minimum_free = torch.cuda.mem_get_info(0)[0]
         qwen_samples = 0
@@ -154,6 +257,7 @@ def run(output_dir: Path, messages_file: Path | None) -> dict:
                                      "free_bytes": torch.cuda.mem_get_info(0)[0]}
         if qwen_samples < 1:
             raise RuntimeError("Qwen GPU-0 free memory was not sampled during model load")
+        _stage(output_dir, result, "request_prepare")
         messages, source = _messages(worker, messages_file)
         result["request_source"] = source
         count = worker.count_messages_tokens(messages)
@@ -162,13 +266,16 @@ def run(output_dir: Path, messages_file: Path | None) -> dict:
         result["input_tokens"] = count
         result["messages_sha256"] = canonical_digest(messages)
         # One short warmup followed by exactly one long request; no environment advances.
+        _stage(output_dir, result, "warmup_generate")
         worker.generate([{"role": "user", "content": "Reply briefly."}], max_new_tokens=32)
+        _stage(output_dir, result, "long_generate")
         generation = worker.generate(messages, max_new_tokens=1024)
         result["generation"] = {key: generation[key] for key in
                                 ("input_tokens", "output_tokens", "generation_status", "inference_seconds")}
         if (generation["input_tokens"] != TARGET_TOKENS or generation["output_tokens"] < 1 or
                 generation["generation_status"] != "complete"):
             raise RuntimeError("Long GPT-OSS generation did not complete successfully")
+        _stage(output_dir, result, "validate_generation")
         files = list((output_dir / "diagnostics").glob("gpt_oss_cuda_memory_*.jsonl"))
         if len(files) != 1:
             raise RuntimeError("Expected one GPT-OSS memory telemetry file")
@@ -191,15 +298,26 @@ def run(output_dir: Path, messages_file: Path | None) -> dict:
                 for row in result["gpu_memory"].values()):
             raise RuntimeError("Two-GPU generation allocations or memory headroom failed validation")
         result["status"] = "infrastructure_valid"
-    except Exception as exc:
-        result.update(status="failed", error_type=type(exc).__name__, error_detail=str(exc))
+        _stage(output_dir, result, "infrastructure_valid")
+    except BaseException as exc:
+        result.update(status="failed", error_type=type(exc).__name__, error_detail=str(exc),
+                      traceback=traceback.format_exc())
+        try:
+            result["worker_evidence"] = _worker_evidence(output_dir, worker, exc)
+        except Exception as evidence_error:
+            result["worker_evidence_error"] = repr(evidence_error)
+        print(result["traceback"], file=sys.stderr, flush=True)
     finally:
         if worker is not None:
             try:
                 worker.close()
             except Exception as exc:
-                result.update(status="failed", close_error=repr(exc))
-        write_json_atomic(output_dir / "feasibility_result.json", result)
+                result["close_error"] = repr(exc)
+                if result["status"] != "failed":
+                    result.update(status="failed", error_type=type(exc).__name__,
+                                  error_detail=f"Worker cleanup failed: {exc}",
+                                  traceback=traceback.format_exc())
+        _write_result(output_dir, result)
     return result
 
 
@@ -220,14 +338,19 @@ def main() -> None:
     test = sub.add_parser("test")
     test.add_argument("--output-dir", required=True, type=Path)
     test.add_argument("--messages-file", type=Path)
+    startup = sub.add_parser("startup-check")
+    startup.add_argument("--output-dir", required=True, type=Path)
     check = sub.add_parser("gate")
     check.add_argument("--result", required=True, type=Path)
     args = parser.parse_args()
     result = (preflight() if args.command == "preflight" else
               gate(args.result) if args.command == "gate" else
-              run(args.output_dir, args.messages_file))
+              run(args.output_dir, args.messages_file if args.command == "test" else None,
+                  startup_only=args.command == "startup-check"))
     print(json.dumps(result, indent=2, sort_keys=True))
     if args.command == "test" and result["status"] != "infrastructure_valid":
+        raise SystemExit(1)
+    if args.command == "startup-check" and result["status"] != "startup_valid":
         raise SystemExit(1)
 
 

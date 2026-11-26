@@ -6,6 +6,8 @@
 #SBATCH --time=02:30:00
 set -euo pipefail
 umask 077
+launch_stage=validate_environment
+trap 'status=$?; echo "Three-GPU launcher failed during ${launch_stage} at line ${LINENO} (exit ${status})" >&2' ERR
 
 : "${THREE_GPU_PHASE:?Set feasibility, smoke, or batch}"
 : "${THREE_GPU_ROOT:?Set a fresh three-GPU experiment root}"
@@ -40,7 +42,18 @@ repo_root="${SLURM_SUBMIT_DIR:?Submit from the committed checkout}"
 cd "$repo_root"
 nvidia-smi --query-gpu=index,uuid,name,memory.total,memory.free --format=csv
 
+launch_stage=dispatch_phase
 case "$THREE_GPU_PHASE" in
+  startup_check)
+    if [[ -e "$THREE_GPU_ROOT/startup_check" ]]; then
+      echo "Startup-check output already exists; refusing to reuse: $THREE_GPU_ROOT/startup_check" >&2
+      exit 1
+    fi
+    echo "Feasibility startup check: job=${SLURM_JOB_ID:-unset} root=$THREE_GPU_ROOT parent_gpu=$CUDA_VISIBLE_DEVICES worker_gpus=$AGENT_SUPPORT_GPTOSS_CUDA_VISIBLE_DEVICES" >&2
+    launch_stage=startup_check_python
+    "$VENV_PATH/bin/python" -u -m agent_support.three_gpu_feasibility_entry startup-check \
+      --output-dir "$THREE_GPU_ROOT/startup_check"
+    ;;
   overnight)
     : "${THREE_GPU_CACHE_JOB_ID:?Set the completed CPU cache job ID}"
     attempt="${THREE_GPU_ATTEMPT:?Overnight wrapper must create its unique attempt directory}"
@@ -62,12 +75,17 @@ case "$THREE_GPU_PHASE" in
     "$VENV_PATH/bin/python" -m agent_support.three_gpu_performance_probe "${args[@]}"
     ;;
   feasibility)
-    test ! -e "$THREE_GPU_ROOT/feasibility_8887"
+    if [[ -e "$THREE_GPU_ROOT/feasibility_8887" ]]; then
+      echo "Feasibility output already exists; refusing to reuse: $THREE_GPU_ROOT/feasibility_8887" >&2
+      exit 1
+    fi
+    echo "Feasibility launch: job=${SLURM_JOB_ID:-unset} root=$THREE_GPU_ROOT parent_gpu=$CUDA_VISIBLE_DEVICES worker_gpus=$AGENT_SUPPORT_GPTOSS_CUDA_VISIBLE_DEVICES python=$VENV_PATH/bin/python" >&2
     args=(--output-dir "$THREE_GPU_ROOT/feasibility_8887")
     if [[ -n "${THREE_GPU_MESSAGES_FILE:-}" ]]; then
       args+=(--messages-file "$THREE_GPU_MESSAGES_FILE")
     fi
-    "$VENV_PATH/bin/python" -m agent_support.three_gpu_feasibility test "${args[@]}"
+    launch_stage=feasibility_python
+    "$VENV_PATH/bin/python" -u -m agent_support.three_gpu_feasibility_entry test "${args[@]}"
     ;;
   smoke|batch)
     "$VENV_PATH/bin/python" -m agent_support.three_gpu_feasibility gate \
