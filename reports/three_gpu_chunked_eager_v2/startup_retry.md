@@ -1,17 +1,25 @@
 # Three-GPU chunked eager startup retry
 
-Job 169480 ended before generation. Its reported worker log reached only
-`Loading weights: 19/411 [10:30<39:41]`; CUDA telemetry contained only
-`model_load_start`. The controller's pinned `timeout_seconds: 1800` was used
-for both the initialization RPC and every generation RPC. It terminated the
-worker at 30 minutes. No OOM or attention execution is established by this run.
+Job 169480 ended before generation. The copied worker log under
+`reports/three_gpu_chunked_eager_v2/debug_logs/job_169480/` shows the first
+weight-loading progress update appeared at 9 minutes 24 seconds, then loading
+reached `19/411` at 10 minutes 30 seconds. It records no later progress before
+the controller's 30-minute timeout. The Slurm stdout contains the same failed feasibility result and
+identifies three allocated L40S devices. The feasibility result has
+`request_source: null`; the separate CUDA telemetry reportedly contains only
+`model_load_start`. No OOM or attention execution is established by this run.
+
+The controller's pinned `timeout_seconds: 1800` was used for both the
+initialization RPC and every generation RPC. It terminated the worker while
+model loading was still incomplete.
 
 The earlier 12/12 sharded run loaded all 411 weights in 41 seconds and took
 90.6 seconds from `model_load_start` to `model_loaded`. An archived single-GPU
 worker log loaded 411 weights in about 1.7 seconds. The new slowdown is in
 `AutoModelForCausalLM.from_pretrained`, after tokenizer and config loading.
-The available job 169480 excerpt cannot distinguish shared-cache I/O from
-per-weight initialization or a transient filesystem stall. No cache contents,
+The full log shows stalls, not a steady 411-weight load at a lower rate. It
+cannot distinguish shared-cache I/O from per-weight initialization, GPU
+transfer, or a transient filesystem stall. No cache contents,
 checkpoint revision, sharding, or model configuration is changed here.
 
 The startup-only retry sets `AGENT_SUPPORT_GPTOSS_STARTUP_TIMEOUT_SECONDS=5400`
@@ -19,8 +27,12 @@ in `scripts/three_gpu_chunked_eager_startup.sbatch`. The frozen controller
 configuration still limits each generation RPC to 1800 seconds. The worker
 reports which deadline expired, and the feasibility result records worker
 startup elapsed time even when initialization fails. The Slurm job remains
-bounded at 2 hours 30 minutes. A second timeout or a read-only cache probe
-showing poor throughput should be investigated before further retries.
+bounded at 2 hours 30 minutes. The longer timeout only prevents the known
+30-minute startup termination; it does not resolve an underlying stall.
+Run the read-only cache probe and, if possible, sample the loading worker's
+CPU usage and `/proc/<pid>/io` on the compute node before using the retry.
+If read bytes advance slowly, investigate the shared cache. If reads stop
+while CPU or GPU work continues, investigate model initialization or transfer.
 
 ## Read-only cache probe on Locust
 
