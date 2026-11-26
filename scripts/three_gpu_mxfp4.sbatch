@@ -41,6 +41,14 @@ cd "$repo_root"
 nvidia-smi --query-gpu=index,uuid,name,memory.total,memory.free --format=csv
 
 case "$THREE_GPU_PHASE" in
+  performance)
+    test ! -e "$THREE_GPU_ROOT/performance_probe"
+    args=(--output-dir "$THREE_GPU_ROOT/performance_probe")
+    if [[ -n "${THREE_GPU_MESSAGES_FILE:-}" ]]; then
+      args+=(--messages-file "$THREE_GPU_MESSAGES_FILE")
+    fi
+    "$VENV_PATH/bin/python" -m agent_support.three_gpu_performance_probe "${args[@]}"
+    ;;
   feasibility)
     test ! -e "$THREE_GPU_ROOT/feasibility_8887"
     args=(--output-dir "$THREE_GPU_ROOT/feasibility_8887")

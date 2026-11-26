@@ -67,12 +67,15 @@ def register_chunked_eager(diagnostics=None) -> str:
         def on_chunk(event, start, end):
             if diagnostics is not None and (event == "error" or start == 0 or end == query.shape[-2]):
                 diagnostics.write(event="attention_chunk_" + event, layer=layer,
+                                  request_id=getattr(diagnostics, "current_request_id", None),
                                   query_start=start, query_end=end,
                                   query_tokens=query.shape[-2], key_tokens=key.shape[-2],
                                   execution_device=str(query.device), memory=diagnostics.snapshot())
+        # A one-token decode has one chunk. Logging both edges for every layer
+        # would add 48 memory snapshots and shared-filesystem writes per token.
         return query_chunks(eager_attention_forward, torch.cat, module, query, key,
                             value, attention_mask, scaling, dropout,
-                            on_chunk=on_chunk, **kwargs)
+                            on_chunk=on_chunk if query.shape[-2] > 1 else None, **kwargs)
 
     ALL_ATTENTION_FUNCTIONS.register(NAME, forward)
     ALL_MASK_ATTENTION_FUNCTIONS.register(NAME, ALL_MASK_ATTENTION_FUNCTIONS["eager"])

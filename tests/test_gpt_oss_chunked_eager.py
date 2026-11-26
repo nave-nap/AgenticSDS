@@ -18,6 +18,7 @@ from agent_support.three_gpu_feasibility import validate_prefill_execution
 
 
 class Query:
+    device = "cuda:0"
     def __init__(self, rows):
         self.rows = rows
         self.shape = (1, 1, len(rows), 1)
@@ -27,6 +28,7 @@ class Query:
 
 class Mask:
     ndim = 4
+    device = "cuda:0"
     def __init__(self, rows):
         self.rows = rows
         self.shape = (1, 1, len(rows), len(rows[0]))
@@ -121,6 +123,18 @@ def test_backend_registers_matching_eager_mask(monkeypatch):
         monkeypatch.setitem(sys.modules, name, fake)
     assert register_chunked_eager() == NAME
     assert callable(attention[NAME]) and masks[NAME] is masks["eager"]
+    events = []
+    diagnostics = SimpleNamespace(write=lambda **row: events.append(row),
+                                  snapshot=lambda: {}, current_request_id=7)
+    register_chunked_eager(diagnostics)
+    module = SimpleNamespace(sink=0.0, layer_idx=0)
+    attention[NAME](module, Query([0.1]), Query([0.2]),
+                    SimpleNamespace(rows=[1.0]), Mask([[0.0]]), scaling=1.0)
+    assert events == []  # decode telemetry must stay bounded per token
+    attention[NAME](module, Query([0.1, 0.2]), Query([0.2, 0.3]),
+                    SimpleNamespace(rows=[1.0, 2.0]), Mask([[0.0, -1e30], [0.0, 0.0]]), scaling=1.0)
+    assert [row["event"] for row in events] == ["attention_chunk_start", "attention_chunk_end"]
+    assert {row["request_id"] for row in events} == {7}
 
 
 def test_two_gpu_worker_prints_full_generation_traceback(monkeypatch, capsys):

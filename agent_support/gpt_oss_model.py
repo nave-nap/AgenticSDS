@@ -392,6 +392,7 @@ class GptOss20BModel:
                     if inputs.shape[-2] > 1:
                         observed = str(inputs.device)
                         self.memory_diagnostics.write(event="layer_q_proj_enter", layer=layer_index,
+                                                      request_id=self._diagnostic_request_id,
                                                       query_tokens=inputs.shape[-2], execution_device=observed,
                                                       memory=self.memory_diagnostics.snapshot())
                         if observed != expected:
@@ -400,6 +401,7 @@ class GptOss20BModel:
                     if output.shape[-2] > 1:
                         observed = str(output.device)
                         self.memory_diagnostics.write(event="layer_complete", layer=layer_index,
+                                                      request_id=self._diagnostic_request_id,
                                                       query_tokens=output.shape[-2], execution_device=observed,
                                                       memory=self.memory_diagnostics.snapshot())
                 layer.self_attn.q_proj.register_forward_pre_hook(before_projection)
@@ -476,6 +478,7 @@ class GptOss20BModel:
         if diagnostics is not None:
             self._diagnostic_request_id += 1
             request_id = self._diagnostic_request_id
+            diagnostics.current_request_id = request_id
             before = diagnostics.start(request_id, limit)
             # Keep the historical since-load high-water fields despite per-request resets.
             self.peak_gpu_memory_bytes = max(self.peak_gpu_memory_bytes,
