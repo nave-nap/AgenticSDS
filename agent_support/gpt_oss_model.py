@@ -20,6 +20,7 @@ from .gpu_memory_diagnostics import (DIRECTORY_ENV, GpuMemoryDiagnostics,
 from .gpt_oss_two_gpu import (assert_device_map, assert_two_gpu_runtime,
                               enabled as two_gpu_enabled, layer_device_map)
 from .gpt_oss_chunked_eager import enabled as chunked_eager_enabled, register_chunked_eager
+from .gpt_oss_load_diagnostics import monitor as model_load_monitor
 
 
 
@@ -351,10 +352,11 @@ class GptOss20BModel:
             device_map = layer_device_map(model_config.num_hidden_layers)
         attention = (register_chunked_eager(shard_diagnostics) if self.chunked_eager else "eager")
         try:
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_id, device_map=device_map or {"": 0}, dtype="auto",
-                low_cpu_mem_usage=True,
-                **({"attn_implementation": attention} if self.two_gpu else {}), **revision)
+            with model_load_monitor(directory, torch):
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_id, device_map=device_map or {"": 0}, dtype="auto",
+                    low_cpu_mem_usage=True,
+                    **({"attn_implementation": attention} if self.two_gpu else {}), **revision)
         except Exception as exc:
             if self.two_gpu:
                 shard_diagnostics.write(event="model_load_error", error_type=type(exc).__name__,

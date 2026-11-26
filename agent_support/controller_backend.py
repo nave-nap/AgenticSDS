@@ -11,6 +11,8 @@ from pathlib import Path
 
 from .gpu_memory_diagnostics import DIRECTORY_ENV, enabled
 from .gpt_oss_two_gpu import VISIBLE_ENV, enabled as two_gpu_enabled
+from .gpt_oss_load_diagnostics import (WORKER_LOG_ENV,
+                                       enabled as model_load_diagnostics_enabled)
 
 STARTUP_TIMEOUT_ENV = "AGENT_SUPPORT_GPTOSS_STARTUP_TIMEOUT_SECONDS"
 
@@ -73,6 +75,8 @@ class GptOssControllerWorker:
             raise ValueError("GPT-OSS startup timeout must be positive")
         log_path = Path(log_dir) / "gpt_oss_controller_worker.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        if model_load_diagnostics_enabled():
+            environment[WORKER_LOG_ENV] = str(log_path.resolve())
         self.log = log_path.open("a", encoding="utf-8")
         self.process = subprocess.Popen(
             [python, "-u", "-m", "agent_support.gpt_oss_controller_worker"],

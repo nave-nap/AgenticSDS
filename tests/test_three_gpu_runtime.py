@@ -130,6 +130,11 @@ def test_worker_isolates_requested_gpus_and_rejects_unsharded_load(monkeypatch, 
     worker.close()
     assert captured[-1]["CUDA_VISIBLE_DEVICES"] == "1,2"
     assert captured[-1]["AGENT_SUPPORT_GPU_MEMORY_DIAGNOSTICS_DIR"] == str(tmp_path / "diagnostics")
+    monkeypatch.setenv("AGENT_SUPPORT_GPTOSS_MODEL_LOAD_DIAGNOSTICS", "1")
+    worker = GptOssControllerWorker(spec, tmp_path / "workers")
+    worker.close()
+    assert captured[-1]["AGENT_SUPPORT_GPTOSS_WORKER_LOG_PATH"] == str(
+        (tmp_path / "workers" / "gpt_oss_controller_worker.log").resolve())
     monkeypatch.setenv(VISIBLE_ENV, "1,1")
     with pytest.raises(ValueError, match="two distinct"):
         GptOssControllerWorker(spec, tmp_path / "workers")
