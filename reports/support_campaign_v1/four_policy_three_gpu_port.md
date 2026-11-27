@@ -1,7 +1,9 @@
 # Four-policy evaluation on the three-L40S runtime
 
-Prepared 26 November 2026. No GPU job was submitted or cancelled. Job 171188
-was user-reported pending when this work began. The full 8,887-input-token,
+Prepared 26 November 2026; startup status updated 27 November 2026. No GPU
+job was submitted or cancelled here. Job 171188 timed out in its combined
+worker-process probe; see the bounded repair in
+`../three_gpu_feasibility_startup_v1/job_171188_repair.md`. The full 8,887-input-token,
 1,024-output-token feasibility gate has not passed in the evidence available
 to this checkout.
 
@@ -64,9 +66,9 @@ The new feasibility check requires a completed long request and compares
 the validated feasibility commit with the policy checkout for model runtime
 files, configs, and manifests. Because controller error handling changed for
 fatal CUDA classification, **run the full feasibility gate on the port commit**
-before submitting the policy smoke. The pending five-minute startup check at
-171188 remains useful as launcher validation, but does not replace that full
-gate. A prior feasibility result from a different runtime source is rejected.
+before submitting the policy smoke. Job 171188 established three-L40S
+isolation but did not pass startup validation. Its result cannot replace the
+full gate. A prior feasibility result from a different runtime source is rejected.
 
 The evaluator stops a run on worker fatality, backend error, support backend
 error, model generation failure, environment error, or malformed accounting.
@@ -122,9 +124,10 @@ not prove GPU generation or scientific task success.
 
 First commit and deploy the port to a clean Locust worktree. Use the pinned
 Qwen and GPT-OSS environments, same caches and M2-200 files as the feasibility
-campaign. Verify 171188's `startup_valid` result. Submit the **full**
-six-hour feasibility job on this port commit in a fresh root using the command
-in `three_gpu_feasibility_startup_v1/protocol.md`. Inspect its JSON, worker
+campaign. Run and inspect the repaired startup probe from
+`three_gpu_feasibility_startup_v1/job_171188_repair.md`. Submit the **full**
+six-hour feasibility job on the same repair commit in a fresh root using that
+report's command. Inspect its JSON, worker
 log, memory JSONL, and Slurm accounting. The following smoke commands are
 conditional on `infrastructure_valid`; they do not submit anything by
 themselves:

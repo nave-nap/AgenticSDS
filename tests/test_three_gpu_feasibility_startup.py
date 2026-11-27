@@ -91,28 +91,120 @@ def test_atomic_result_failure_keeps_original_error_in_fallback(tmp_path, monkey
 def test_startup_check_uses_worker_python_with_two_visible_l40s(tmp_path, monkeypatch):
     monkeypatch.setenv("PINNED_GPT_PYTHON", sys.executable)
     monkeypatch.setenv("PINNED_HF_HOME", str(tmp_path))
-    seen = {}
+    seen = []
     def fake_run(command, **kwargs):
-        seen.update(command=command, env=kwargs["env"], timeout=kwargs["timeout"])
-        return SimpleNamespace(returncode=0, stdout=json.dumps({"count": 2,
-            "names": ["NVIDIA L40S", "NVIDIA L40S"]}) + "\n", stderr="")
+        seen.append({"command": command, "env": kwargs["env"], "timeout": kwargs["timeout"]})
+        value = ({"count": 2, "names": ["NVIDIA L40S", "NVIDIA L40S"]}
+                 if "cuda_identity" in command else {"worker_module_imported": True})
+        return SimpleNamespace(returncode=0, stdout=json.dumps(value) + "\n", stderr="")
     monkeypatch.setattr(feasibility.subprocess, "run", fake_run)
     result = feasibility._check_worker_process(
-        {"python_env": "PINNED_GPT_PYTHON", "hf_home_env": "PINNED_HF_HOME"}, ["1", "2"])
+        {"python_env": "PINNED_GPT_PYTHON", "hf_home_env": "PINNED_HF_HOME"}, ["1", "2"], tmp_path)
     assert result["count"] == 2
-    assert seen["env"]["CUDA_VISIBLE_DEVICES"] == "1,2"
-    assert seen["env"]["HF_HOME"] == str(tmp_path)
-    assert seen["timeout"] == 60
-    assert "agent_support.gpt_oss_controller_worker" in seen["command"][2]
+    assert [item["timeout"] for item in seen] == [120, 30]
+    assert all(item["env"]["CUDA_VISIBLE_DEVICES"] == "1,2" for item in seen)
+    assert all(item["env"]["HF_HOME"] == str(tmp_path) for item in seen)
+    assert all("agent_support.three_gpu_startup_probe" in item["command"] for item in seen)
+    assert (tmp_path / "cuda_identity_result.json").exists()
+    assert (tmp_path / "worker_import_result.json").exists()
 
 
-def test_startup_check_records_worker_import_exit_code(tmp_path, monkeypatch):
+def test_startup_check_records_cuda_identity_exit_code(tmp_path, monkeypatch):
     monkeypatch.setenv("PINNED_GPT_PYTHON", sys.executable)
     monkeypatch.setattr(feasibility.subprocess, "run", lambda *_args, **_kwargs:
                         SimpleNamespace(returncode=7, stdout="", stderr="import failed"))
     with pytest.raises(RuntimeError, match="exited 7") as caught:
-        feasibility._check_worker_process({"python_env": "PINNED_GPT_PYTHON"}, ["1", "2"])
-    assert caught.value.worker_exit_code == 7
+        feasibility._check_worker_process({"python_env": "PINNED_GPT_PYTHON"},
+                                          ["1", "2"], tmp_path)
+    assert caught.value.probe_evidence["exit_code"] == 7
+    assert json.loads((tmp_path / "cuda_identity_result.json").read_text())["status"] == "failed"
+
+
+@pytest.mark.parametrize("identity", [
+    {"count": 2, "names": ["NVIDIA L40S"]},
+    {"count": True, "names": ["NVIDIA L40S", "NVIDIA L40S"]},
+    {"count": 2, "names": ["NVIDIA L40S", "NVIDIA A100"]},
+])
+def test_malformed_cuda_evidence_stops_before_worker_import(tmp_path, monkeypatch, identity):
+    monkeypatch.setenv("PINNED_GPT_PYTHON", sys.executable)
+    phases = []
+    def fake_run(command, **_kwargs):
+        phases.append(command[4])
+        return SimpleNamespace(returncode=0, stdout=json.dumps(identity) + "\n", stderr="")
+    monkeypatch.setattr(feasibility.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="malformed or not two L40S"):
+        feasibility._check_worker_process({"python_env": "PINNED_GPT_PYTHON"},
+                                          ["1", "2"], tmp_path)
+    assert phases == ["cuda_identity"]
+    assert not (tmp_path / "worker_import_result.json").exists()
+
+
+def test_startup_timeout_preserves_partial_timing_and_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(feasibility, "preflight", lambda: {})
+    monkeypatch.setattr(feasibility, "require_clean_commit", lambda: "fixed")
+    monkeypatch.setattr(feasibility, "config_for", lambda _: {"autonomous_support": {
+        "model": {"python_env": "PINNED_GPT_PYTHON"}}})
+    monkeypatch.setenv("PINNED_GPT_PYTHON", sys.executable)
+    for key in (feasibility.SHARD_ENV, feasibility.CHUNKED_ENV,
+                "AGENT_SUPPORT_GPU_MEMORY_DIAGNOSTICS"):
+        monkeypatch.setenv(key, "1")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    monkeypatch.setenv(feasibility.VISIBLE_ENV, "1,2")
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(cuda=SimpleNamespace(
+        device_count=lambda: 1, get_device_name=lambda _: "NVIDIA L40S")))
+    def timeout(command, **kwargs):
+        Path(command[-1]).write_text(json.dumps({"stage": "python_started",
+            "monotonic_seconds": 0, "elapsed_seconds": 0,
+            "timestamp_utc": "2026-11-27T00:00:00+00:00"}) + "\n")
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"], output=b"partial")
+    monkeypatch.setattr(feasibility.subprocess, "run", timeout)
+    result = feasibility.run(tmp_path / "attempt", None, startup_only=True)
+    assert result["status"] == "failed"
+    assert result["startup_stage"] == "worker_process_check"
+    assert result["startup_probe_failure"]["status"] == "timeout"
+    assert result["startup_probe_failure"]["stdout_tail"] == "partial"
+    assert result["startup_probe_failure"]["events"][0]["stage"] == "python_started"
+    assert (tmp_path / "attempt" / "cuda_identity_result.json").exists()
+    assert not (tmp_path / "attempt" / "worker_import_result.json").exists()
+    assert json.loads((tmp_path / "attempt" / "feasibility_result.json").read_text()) == result
+
+
+def test_worker_import_timeout_follows_valid_cuda_identity(tmp_path, monkeypatch):
+    monkeypatch.setenv("PINNED_GPT_PYTHON", sys.executable)
+    phases = []
+    def fake_run(command, **kwargs):
+        phases.append(command[4])
+        if command[4] == "cuda_identity":
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"count": 2,
+                "names": ["NVIDIA L40S", "NVIDIA L40S"]}) + "\n", stderr="")
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=b"import stalled")
+    monkeypatch.setattr(feasibility.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="worker_import exceeded the 30-second") as caught:
+        feasibility._check_worker_process({"python_env": "PINNED_GPT_PYTHON"},
+                                          ["1", "2"], tmp_path)
+    assert phases == ["cuda_identity", "worker_import"]
+    assert caught.value.probe_evidence["status"] == "timeout"
+    assert caught.value.probe_evidence["stderr_tail"] == "import stalled"
+    assert json.loads((tmp_path / "worker_import_result.json").read_text())["status"] == "timeout"
+
+
+def test_failed_startup_command_exits_nonzero(monkeypatch, tmp_path):
+    monkeypatch.setattr(feasibility, "run", lambda *_args, **_kwargs: {"status": "failed"})
+    monkeypatch.setattr(sys, "argv", ["feasibility", "startup-check", "--output-dir",
+                                  str(tmp_path / "attempt")])
+    with pytest.raises(SystemExit) as caught:
+        feasibility.main()
+    assert caught.value.code == 1
+
+
+def test_startup_valid_result_cannot_pass_full_feasibility_gate(tmp_path, monkeypatch):
+    monkeypatch.setattr(feasibility, "preflight", lambda: {"protocol": feasibility.PROTOCOL})
+    monkeypatch.setattr(feasibility, "require_clean_commit", lambda: "same-commit")
+    path = tmp_path / "startup_result.json"
+    path.write_text(json.dumps({"status": "startup_valid", "protocol": feasibility.PROTOCOL,
+                                "git_commit": "same-commit"}))
+    with pytest.raises(RuntimeError, match="not infrastructure valid"):
+        feasibility.gate(path)
 
 
 def test_startup_only_path_writes_valid_result_without_loading_models(tmp_path, monkeypatch):

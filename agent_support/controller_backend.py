@@ -23,9 +23,27 @@ class ControllerWorkerOOM(RuntimeError):
     failure_kind = "cuda_oom"
     termination_reason = "controller_cuda_oom"
 
-    def __init__(self, detail: str):
+    def __init__(self, detail: str, worker_traceback: str | None = None,
+                 request_id: int | None = None, failed_phase: str | None = None):
         self.detail = detail
+        self.worker_traceback = worker_traceback
+        self.request_id = request_id
+        self.failed_phase = failed_phase
         super().__init__(f"GPT-OSS controller worker OutOfMemoryError: {detail}")
+
+
+class ControllerWorkerFatalCUDA(RuntimeError):
+    failure_kind = "cuda_fatal"
+    termination_reason = "controller_cuda_fatal"
+
+    def __init__(self, error_type: str, detail: str, worker_traceback: str | None = None,
+                 request_id: int | None = None, failed_phase: str | None = None):
+        self.error_type = error_type
+        self.detail = detail
+        self.worker_traceback = worker_traceback
+        self.request_id = request_id
+        self.failed_phase = failed_phase
+        super().__init__(f"GPT-OSS controller worker {error_type}: {detail}")
 
 
 class ControllerWorkerUnavailable(RuntimeError):
@@ -39,8 +57,23 @@ class ControllerWorkerUnavailable(RuntimeError):
         super().__init__(f"GPT-OSS controller worker unavailable: {detail}")
 
 
-def worker_failure_marker(exc: ControllerWorkerOOM | ControllerWorkerUnavailable) -> dict:
-    return {"kind": exc.failure_kind, "detail": exc.detail}
+def worker_failure_marker(exc: ControllerWorkerOOM | ControllerWorkerFatalCUDA |
+                          ControllerWorkerUnavailable) -> dict:
+    result = {"kind": exc.failure_kind, "detail": exc.detail}
+    for key in ("worker_traceback", "request_id", "failed_phase", "error_type"):
+        value = getattr(exc, key, None)
+        if value is not None:
+            result[key] = value
+    return result
+
+
+def _fatal_cuda_response(error_type: str, detail: str) -> bool:
+    if error_type not in {"AcceleratorError", "RuntimeError"}:
+        return False
+    return bool(re.search(
+        r"CUDA (?:driver )?error: (?:an illegal memory access was encountered|"
+        r"device-side assert triggered|an illegal instruction was encountered|"
+        r"unspecified launch failure)(?:\b|$)", detail, re.IGNORECASE))
 
 
 class GptOssControllerWorker:
@@ -148,9 +181,17 @@ class GptOssControllerWorker:
             raise ControllerWorkerUnavailable("worker closed its protocol stream")
         result = json.loads(line)
         if not result.get("ok"):
-            if result.get("error_type") == "OutOfMemoryError":
-                raise ControllerWorkerOOM(result.get("error"))
-            raise RuntimeError(f"GPT-OSS controller worker {result.get('error_type')}: {result.get('error')}")
+            error_type, detail = result.get("error_type"), result.get("error")
+            if error_type == "OutOfMemoryError":
+                self.unusable = True
+                raise ControllerWorkerOOM(detail, result.get("traceback"))
+            if isinstance(error_type, str) and isinstance(detail, str) and \
+                    _fatal_cuda_response(error_type, detail):
+                self.unusable = True
+                raise ControllerWorkerFatalCUDA(error_type, detail, result.get("traceback"))
+            error = RuntimeError(f"GPT-OSS controller worker {error_type}: {detail}")
+            error.worker_traceback = result.get("traceback")
+            raise error
         return result
 
     def metadata(self) -> dict:

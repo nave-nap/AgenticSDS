@@ -90,9 +90,12 @@ def serve(source=None, sink=None, model_factory=None) -> None:
             else:
                 raise ValueError(f"Unknown controller worker operation: {op}")
         except Exception as exc:
+            failure_traceback = traceback.format_exc()
             if two_gpu_enabled():
-                traceback.print_exc(file=sys.stderr)
+                print(failure_traceback, file=sys.stderr, flush=True)
             response = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+            if os.environ.get("AGENT_SUPPORT_GPTOSS_WORKER_TRACEBACKS") == "1":
+                response["traceback"] = failure_traceback
         if release_after_generation and cache_release_enabled():
             # The generation frame and exception handler have both unwound here.
             try:

@@ -23,6 +23,8 @@ from .recovery_v4_eval import config_for, manifest, memory_checks
 PROTOCOL = "three_gpu_chunked_eager_v2"
 TARGET_TOKENS = 8887
 MIN_FREE_BYTES = 10 * 1024**3
+CUDA_IDENTITY_TIMEOUT_SECONDS = 120
+WORKER_IMPORT_TIMEOUT_SECONDS = 30
 
 
 def preflight() -> dict:
@@ -148,7 +150,72 @@ def _stage(output_dir: Path, result: dict, name: str) -> None:
     write_json_atomic(output_dir / "feasibility_result.json", result)
 
 
-def _check_worker_process(spec: dict, worker_devices: list[str]) -> dict:
+def _probe_text(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
+
+
+def _run_startup_probe(python: str, environment: dict, output_dir: Path,
+                       phase: str, timeout_seconds: int) -> tuple[dict, dict]:
+    events_path = output_dir / f"{phase}_events.jsonl"
+    result_path = output_dir / f"{phase}_result.json"
+    started_utc = datetime.now(timezone.utc).isoformat()
+    started = time.monotonic()
+    evidence = {"phase": phase, "started_utc": started_utc,
+                "timeout_seconds": timeout_seconds, "events_path": str(events_path),
+                "cuda_visible_devices": environment["CUDA_VISIBLE_DEVICES"]}
+    try:
+        completed = subprocess.run(
+            [python, "-u", "-m", "agent_support.three_gpu_startup_probe", phase,
+             "--events", str(events_path)], env=environment, capture_output=True,
+            text=True, timeout=timeout_seconds)
+        evidence.update(exit_code=completed.returncode,
+                        stdout_tail=_probe_text(completed.stdout)[-8192:],
+                        stderr_tail=_probe_text(completed.stderr)[-8192:])
+        if completed.returncode != 0:
+            raise RuntimeError(f"{phase} subprocess exited {completed.returncode}")
+        value = json.loads(_probe_text(completed.stdout).strip().splitlines()[-1])
+        if not isinstance(value, dict):
+            raise ValueError(f"{phase} returned non-object evidence")
+        evidence["status"] = "complete"
+        return value, evidence
+    except subprocess.TimeoutExpired as exc:
+        evidence.update(status="timeout", stdout_tail=_probe_text(exc.stdout)[-8192:],
+                        stderr_tail=_probe_text(exc.stderr)[-8192:])
+        error = RuntimeError(f"{phase} exceeded the {timeout_seconds}-second subprocess bound")
+        error.probe_evidence = evidence
+        raise error from exc
+    except (RuntimeError, ValueError, IndexError, json.JSONDecodeError) as exc:
+        evidence["status"] = "failed"
+        error = RuntimeError(f"{phase} returned invalid startup evidence: {exc}")
+        error.probe_evidence = evidence
+        raise error from exc
+    finally:
+        evidence["elapsed_seconds"] = round(time.monotonic() - started, 3)
+        evidence["finished_utc"] = datetime.now(timezone.utc).isoformat()
+        try:
+            evidence["events"] = ([json.loads(line) for line in events_path.read_text().splitlines()]
+                                  if events_path.exists() else [])
+            previous = started
+            durations = {}
+            for event in evidence["events"]:
+                current = event.get("monotonic_seconds")
+                if isinstance(current, (int, float)) and current >= previous:
+                    durations[event["stage"]] = round(current - previous, 3)
+                    previous = current
+            evidence["phase_durations_seconds"] = durations
+        except (OSError, ValueError, KeyError, TypeError) as events_error:
+            evidence["events_read_error"] = repr(events_error)
+        try:
+            write_json_atomic(result_path, evidence)
+        except OSError as write_error:
+            evidence["result_write_error"] = repr(write_error)
+            print(f"Startup probe result write failed: {write_error!r}", file=sys.stderr,
+                  flush=True)
+
+
+def _check_worker_process(spec: dict, worker_devices: list[str], output_dir: Path) -> dict:
     python = os.environ.get(spec["python_env"], "")
     if not python or not Path(python).is_file():
         raise ValueError("Pinned GPT-OSS Python executable is unavailable")
@@ -157,23 +224,23 @@ def _check_worker_process(spec: dict, worker_devices: list[str]) -> dict:
     hf_variable = spec.get("hf_home_env")
     if hf_variable:
         environment["HF_HOME"] = os.environ[hf_variable]
-    script = ("import json, torch, agent_support.gpt_oss_controller_worker; "
-              "print(json.dumps({'count': torch.cuda.device_count(), "
-              "'names': [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]}))")
-    completed = subprocess.run([python, "-c", script], env=environment,
-                               capture_output=True, text=True, timeout=60)
-    evidence = {"exit_code": completed.returncode, "stderr_tail": completed.stderr[-8192:],
-                "cuda_visible_devices": environment["CUDA_VISIBLE_DEVICES"]}
-    if completed.returncode != 0:
-        error = RuntimeError(f"GPT-OSS worker import check exited {completed.returncode}: "
-                             f"{completed.stderr[-8192:]}")
-        error.worker_exit_code = completed.returncode
+    identity, cuda_probe = _run_startup_probe(python, environment, output_dir,
+        "cuda_identity", CUDA_IDENTITY_TIMEOUT_SECONDS)
+    if (type(identity.get("count")) is not int or identity["count"] != 2 or
+            not isinstance(identity.get("names"), list) or len(identity["names"]) != 2 or
+            any(not isinstance(name, str) or "L40S" not in name for name in identity["names"])):
+        error = RuntimeError(f"GPT-OSS CUDA identity is malformed or not two L40S devices: {identity}")
+        error.probe_evidence = cuda_probe
         raise error
-    identity = json.loads(completed.stdout.strip().splitlines()[-1])
-    evidence.update(identity)
-    if identity.get("count") != 2 or any("L40S" not in name for name in identity.get("names", [])):
-        raise RuntimeError(f"GPT-OSS worker process sees incorrect GPU identities: {identity}")
-    return evidence
+    imported, import_probe = _run_startup_probe(python, environment, output_dir,
+        "worker_import", WORKER_IMPORT_TIMEOUT_SECONDS)
+    if imported.get("worker_module_imported") is not True:
+        error = RuntimeError(f"GPT-OSS worker module import evidence is malformed: {imported}")
+        error.probe_evidence = import_probe
+        raise error
+    return {"count": identity["count"], "names": identity["names"],
+            "cuda_visible_devices": environment["CUDA_VISIBLE_DEVICES"],
+            "cuda_identity_probe": cuda_probe, "worker_import_probe": import_probe}
 
 
 def run(output_dir: Path, messages_file: Path | None, *, startup_only: bool = False) -> dict:
@@ -212,7 +279,7 @@ def run(output_dir: Path, messages_file: Path | None, *, startup_only: bool = Fa
         if startup_only:
             _stage(output_dir, result, "worker_process_check")
             result["worker_process_check"] = _check_worker_process(
-                config["autonomous_support"]["model"], worker_devices)
+                config["autonomous_support"]["model"], worker_devices, output_dir)
             result["status"] = "startup_valid"
             _stage(output_dir, result, "startup_valid")
             return result
@@ -302,6 +369,8 @@ def run(output_dir: Path, messages_file: Path | None, *, startup_only: bool = Fa
     except BaseException as exc:
         result.update(status="failed", error_type=type(exc).__name__, error_detail=str(exc),
                       traceback=traceback.format_exc())
+        if getattr(exc, "probe_evidence", None):
+            result["startup_probe_failure"] = exc.probe_evidence
         try:
             result["worker_evidence"] = _worker_evidence(output_dir, worker, exc)
         except Exception as evidence_error:
